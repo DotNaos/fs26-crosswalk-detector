@@ -1,0 +1,45 @@
+{
+  "run_name": "local-debug-v1",
+  "max_raw_size_gb": 1.0,
+  "imagery_resolution_cm": 10,
+  "tile_size_m": 25,
+  "sliding_window_step_m": 25,
+  "target_per_class": 64,
+  "split_ratios": {
+    "train": 0.7,
+    "val": 0.15,
+    "test": 0.15
+  },
+  "wmts_zoom": 20,
+  "wmts_tile_radius": 2,
+  "auto_search_radius": 18,
+  "cities": [
+    {
+      "name": "Zurich",
+      "country": "Switzerland",
+      "latitude": 47.3769,
+      "longitude": 8.5417,
+      "area_km2": 4.0,
+      "split": "train",
+      "notes": "Large-city seed area for the first pilot run."
+    },
+    {
+      "name": "Winterthur",
+      "country": "Switzerland",
+      "latitude": 47.49995,
+      "longitude": 8.72413,
+      "area_km2": 3.0,
+      "split": "val",
+      "notes": "Medium-city seed area for validation."
+    },
+    {
+      "name": "Chur",
+      "country": "Switzerland",
+      "latitude": 46.8508,
+      "longitude": 9.5329,
+      "area_km2": 3.0,
+      "split": "test",
+      "notes": "Smaller-city seed area for test coverage."
+    }
+  ]
+}

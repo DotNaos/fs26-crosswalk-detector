@@ -1,7 +1,5 @@
-"""Helpers for dataset bookkeeping."""
+"""Compatibility wrapper for dataset helpers."""
 
+from .pilot import image_label_pair_count
 
-def image_label_pair_count(items: list[tuple[str, int]]) -> int:
-    """Return the number of labeled image items."""
-
-    return len(items)
+__all__ = ["image_label_pair_count"]

@@ -4,7 +4,18 @@ version = "0.1.0"
 description = "Image classification project scaffold for FS26."
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+  "numpy>=2.0,<3.0",
+  "pillow>=11.0,<12.0",
+  "safetensors>=0.7.0",
+  "torch>=2.11.0",
+  "torchvision>=0.26.0",
+  "transformers>=5.4.0",
+]
+
+[project.scripts]
+crosswalk-pipeline = "crosswalk_detector.cli:main"
+crosswalk-scan-server = "crosswalk_detector.scan_server:main"
 
 [dependency-groups]
 dev = [

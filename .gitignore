@@ -7,10 +7,15 @@ __pycache__/
 .ruff_cache/
 dist/
 build/
+.env
+.env.*
+web/node_modules/
+web/dist/
 
 # Local ML assets
 data/
 models/
+validation-output/
 *.pt
 *.pth
 *.ckpt
