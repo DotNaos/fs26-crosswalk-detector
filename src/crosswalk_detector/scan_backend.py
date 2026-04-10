@@ -6,10 +6,12 @@ from dataclasses import dataclass
 from io import BytesIO
 import math
 import os
+import ssl
 from typing import Iterable
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
+import certifi
 import numpy as np
 from PIL import Image
 import torch
@@ -108,7 +110,8 @@ def _build_wms_url(scene: SceneRequest) -> str:
 
 
 def fetch_scene_image(scene: SceneRequest) -> Image.Image:
-    with urlopen(_build_wms_url(scene)) as response:
+    ssl_context = ssl.create_default_context(cafile=certifi.where())
+    with urlopen(_build_wms_url(scene), context=ssl_context) as response:
         return Image.open(BytesIO(response.read())).convert("RGB")
 
 
