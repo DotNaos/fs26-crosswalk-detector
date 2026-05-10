@@ -1,12 +1,13 @@
-import type { MapBasemap } from "../types";
+import { Button, Card, Input, Label, TextField } from "@heroui/react";
+import { LoaderCircle, Pause, Play } from "lucide-react";
 
 type MapScanControlsProps = {
   sceneLabel: string;
+  isMobileLayout?: boolean;
   mapZoom: number;
   showGrid: boolean;
   sceneTilesReady: boolean;
   totalTilesInCircle: number;
-  basemap: MapBasemap;
   scanRadius: number;
   scanDelay: number;
   scanRunning: boolean;
@@ -18,104 +19,140 @@ type MapScanControlsProps = {
   noCrosswalkCount: number;
   liveScanStep: number;
   activeSummary: string | null;
-  onBasemapChange: (next: MapBasemap) => void;
+  autopilotMode?: boolean;
   onScanRadiusChange: (next: number) => void;
   onScanDelayChange: (next: number) => void;
   onStartScan: () => void;
   onPauseScan: () => void;
-  onResetScan: () => void;
   onExportBatchJob: () => void;
   onImportBatchResult: () => void;
 };
 
 export function MapScanControls({
   sceneLabel,
+  isMobileLayout = false,
   mapZoom,
   showGrid,
   sceneTilesReady,
   totalTilesInCircle,
-  basemap,
   scanRadius,
-  scanDelay,
   scanRunning,
   scanQueued,
   scanPreparing,
   sceneImagesReady,
   scannedCount,
-  crosswalkCount,
-  noCrosswalkCount,
   liveScanStep,
   activeSummary,
-  onBasemapChange,
+  autopilotMode = false,
   onScanRadiusChange,
-  onScanDelayChange,
   onStartScan,
   onPauseScan,
-  onResetScan,
-  onExportBatchJob,
-  onImportBatchResult,
 }: MapScanControlsProps) {
+  const statusLine = !sceneTilesReady
+    ? "Loading area"
+    : !showGrid
+      ? `Zoom ${mapZoom.toFixed(1)} to open the grid`
+      : scanQueued || scanPreparing
+        ? "Preparing scan"
+        : scanRunning
+          ? `Running ${liveScanStep}/${totalTilesInCircle}`
+          : !sceneImagesReady
+            ? "Loading imagery"
+            : `${scannedCount}/${totalTilesInCircle} scanned`;
+
   return (
     <>
-      <div className="map-header">
-        <div>
-          <p className="eyebrow">Map canvas</p>
-          <h2>{sceneLabel}</h2>
-        </div>
-        <div className="pill-row">
-          <span className="pill muted">Zoom {mapZoom.toFixed(1)}</span>
-          <span className="pill muted">
-            {!sceneTilesReady ? "Loading tile field" : showGrid ? `${totalTilesInCircle} tiles in circle` : "Zoom in to open the tile field"}
-          </span>
-          <button className={`pill pill-button ${basemap === "osm" ? "active" : ""}`} onClick={() => onBasemapChange("osm")} type="button">
-            OSM
-          </button>
-          <button className={`pill pill-button ${basemap === "swisstopo" ? "active" : ""}`} onClick={() => onBasemapChange("swisstopo")} type="button">
-            SWISSIMAGE
-          </button>
-        </div>
-      </div>
+      {isMobileLayout ? (
+        <div className="flex w-full min-w-0 flex-col gap-3">
+          <div className="flex min-w-0 items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="truncate text-base font-semibold">{sceneLabel}</div>
+              <div className="line-clamp-2 text-xs leading-snug text-white/65">{activeSummary ?? statusLine}</div>
+            </div>
+            <div className="shrink-0 rounded-[16px] bg-white/10 px-3 py-2 text-sm font-semibold [corner-shape:squircle]">
+              {scannedCount}/{totalTilesInCircle}
+            </div>
+          </div>
 
-      <div className="scan-toolbar map-toolbar">
-        <label>
-          Radius (tiles)
-          <input min={2} max={12} step={1} type="number" value={scanRadius} onChange={(event) => onScanRadiusChange(Number(event.target.value) || scanRadius)} />
-        </label>
-        <label>
-          Sweep speed (ms)
-          <input min={8} max={400} step={8} type="number" value={scanDelay} onChange={(event) => onScanDelayChange(Number(event.target.value) || scanDelay)} />
-        </label>
-        <div className="scan-buttons">
-          {scanRunning ? (
-            <button className="ghost" onClick={onPauseScan} type="button">
-              Pause
-            </button>
-          ) : (
-            <button className="primary positive" disabled={scanQueued || scanPreparing} onClick={onStartScan} type="button">
-              {scanQueued || scanPreparing ? "Preparing Scan" : "Start Scan"}
-            </button>
-          )}
-          <button className="ghost" onClick={onResetScan} type="button">
-            Reset Results
-          </button>
-          <button className="ghost" disabled={!showGrid || totalTilesInCircle === 0} onClick={onExportBatchJob} type="button">
-            Export Batch Job
-          </button>
-          <button className="ghost" disabled={!showGrid} onClick={onImportBatchResult} type="button">
-            Import Batch Result
-          </button>
-        </div>
-      </div>
+          <div className="grid grid-cols-[1fr,auto] gap-2">
+            {autopilotMode ? (
+              <div className="rounded-[16px] bg-white/10 px-3 py-2 [corner-shape:squircle]">
+                <div className="text-xs font-semibold">Auto urban panel</div>
+                <div className="text-[11px] text-white/60">planned perimeter</div>
+              </div>
+            ) : (
+              <TextField className="min-w-0" variant="secondary">
+                <Label>Radius</Label>
+                <Input
+                  className="h-10 text-center"
+                  max={12}
+                  min={2}
+                  type="number"
+                  value={String(scanRadius)}
+                  onChange={(event) => onScanRadiusChange(Number(event.target.value) || scanRadius)}
+                />
+              </TextField>
+            )}
 
-      <div className="scan-status">
-        <span className="pill muted">Scanned {scannedCount}/{totalTilesInCircle}</span>
-        <span className="pill green">Crosswalk {crosswalkCount}</span>
-        <span className="pill red">No crosswalk {noCrosswalkCount}</span>
-        {scanQueued || scanPreparing ? <span className="pill amber">Preparing scan</span> : null}
-        {scanRunning ? <span className="pill amber">{scannedCount === 0 && liveScanStep <= 1 ? "Classifying first tiles" : `Running ${liveScanStep}/${totalTilesInCircle}`}</span> : null}
-        {!sceneImagesReady ? <span className="pill amber">Loading scene tiles</span> : null}
-        <span className="pill muted">{activeSummary ?? "Results are saved automatically"}</span>
-      </div>
+            {scanRunning ? (
+              <Button aria-label="Pause scan" className="mt-6 size-10 shrink-0 rounded-[16px] [corner-shape:squircle]" isIconOnly onPress={onPauseScan} size="sm" variant="secondary">
+                <Pause className="size-4" />
+              </Button>
+            ) : (
+              <Button
+                aria-label="Start scan"
+                className="mt-6 size-10 shrink-0 rounded-[16px] [corner-shape:squircle]"
+                isDisabled={scanQueued || scanPreparing}
+                isIconOnly
+                onPress={onStartScan}
+                size="sm"
+                variant="primary"
+              >
+                {scanQueued || scanPreparing ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" />}
+              </Button>
+            )}
+          </div>
+        </div>
+      ) : (
+        <Card className="pointer-events-auto max-h-[calc(100dvh-2rem)] w-[min(22rem,calc(100vw-2rem))] overflow-hidden shadow-2xl" variant="secondary">
+          <Card.Header>
+            <div className="flex min-w-0 flex-col gap-1">
+              <Card.Title>{sceneLabel}</Card.Title>
+              <Card.Description>{activeSummary ?? statusLine}</Card.Description>
+            </div>
+          </Card.Header>
+          <Card.Content className="flex max-h-full min-h-0 flex-col gap-3 overflow-y-auto" data-scroll-guard="map-scan-controls">
+            {autopilotMode ? (
+              <div className="rounded-[16px] bg-content1/70 px-3 py-2 [corner-shape:squircle]">
+                <div className="text-sm font-semibold">Auto urban panel</div>
+                <div className="text-xs text-foreground/60">Scanning the planned perimeter cell.</div>
+              </div>
+            ) : (
+              <TextField variant="secondary">
+                <Label>Radius</Label>
+                <Input
+                  max={12}
+                  min={2}
+                  type="number"
+                  value={String(scanRadius)}
+                  onChange={(event) => onScanRadiusChange(Number(event.target.value) || scanRadius)}
+                />
+              </TextField>
+            )}
+            <div className="flex gap-2">
+              {scanRunning ? (
+                <Button fullWidth onPress={onPauseScan} variant="secondary">
+                  Pause
+                </Button>
+              ) : (
+                <Button fullWidth isDisabled={scanQueued || scanPreparing} onPress={onStartScan} variant="primary">
+                  {scanQueued || scanPreparing ? "Preparing" : "Start scan"}
+                </Button>
+              )}
+            </div>
+          </Card.Content>
+        </Card>
+      )}
     </>
   );
 }

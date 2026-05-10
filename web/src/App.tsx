@@ -1,19 +1,24 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { ensureSceneImages, listDatasets, loadConfig, loadDatasetMeta, loadReviewState, loadScene, saveConfig, saveReviewState, updateTile } from "./api";
-import { exportBrowserDatasetZip } from "./browser-export";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createAutopilotDataset, createDataset, ensureSceneImages, listDatasets, loadAutopilotPlan, loadConfig, loadDatasetMeta, loadReviewState, loadScene, saveConfig, saveReviewState, updateTile } from "./api";
+import type { AutopilotPlan } from "./autopilot-planner";
+import { asAutopilotPlan, FALLBACK_EXPORT, FALLBACK_RUN, needsRealAutopilotPlanRefresh } from "./app-autopilot";
+import { DEFAULT_BROWSER_CONFIG } from "./default-config";
 import { checksum, sameSceneReviewState } from "./map-validation";
 import { normalizeReviewState, sceneReviewStateFor } from "./review-state";
+import { buildScanBatchJob, type ScanBatchResult } from "./scan-batch";
 import type { BrowserLabelSuggestion, DatasetListEntry, DatasetSummary, MapBasemap, RealDatasetConfig, ReviewState, ScenePayload } from "./types";
 import { sortScenes } from "./utils";
-import { BrowserDatasetBuilder } from "./components/BrowserDatasetBuilder";
-import { ConfigEditor } from "./components/ConfigEditor";
-import { Inspector } from "./components/Inspector";
+import { AppDrawers } from "./components/AppDrawers";
+import { AppOverlayPanels } from "./components/AppOverlayPanels";
 import { SceneMap } from "./components/SceneMap";
+import { summarizeErrorMessage } from "./error-summary";
 import { useBrowserCrosswalkLabeler } from "./hooks/useBrowserCrosswalkLabeler";
+import { useMobileLayout } from "./hooks/useMobileLayout";
+import { useMobileRemoteJob } from "./hooks/useMobileRemoteJob";
+import { useSceneFootprint } from "./hooks/useSceneFootprint";
 
-const FALLBACK_RUN = "real-v1";
-const FALLBACK_EXPORT = "real-balanced-256";
-const DEFAULT_SCAN_BACKEND_URL = "http://127.0.0.1:8000";
+const REMOTE_SCAN_THRESHOLD = 0.5, ACTIVE_REMOTE_STATUSES = new Set(["bootstrapping", "syncing", "submitting", "queued", "running"]);
+
 export default function App() {
   const [datasets, setDatasets] = useState<DatasetListEntry[]>([]);
   const [runName, setRunName] = useState(FALLBACK_RUN);
@@ -23,40 +28,42 @@ export default function App() {
   const [focusSceneId, setFocusSceneId] = useState<string | undefined>();
   const [reviewState, setReviewState] = useState<ReviewState>(normalizeReviewState());
   const [reviewStateReady, setReviewStateReady] = useState(false);
-  const [draftLabel, setDraftLabel] = useState("crosswalk");
-  const [draftSelected, setDraftSelected] = useState(true);
   const [saving, setSaving] = useState(false);
   const [config, setConfig] = useState<RealDatasetConfig | undefined>();
   const [error, setError] = useState<string | null>(null);
-  const [scanBackendUrl, setScanBackendUrl] = useState(() => window.localStorage.getItem("crosswalk.scan-backend-url") ?? DEFAULT_SCAN_BACKEND_URL);
+  const [isErrorDrawerOpen, setIsErrorDrawerOpen] = useState(false);
   const [basemap, setBasemap] = useState<MapBasemap>(() => {
     const stored = window.localStorage.getItem("crosswalk-review:basemap");
-    return stored === "swisstopo" ? "swisstopo" : "osm";
+    return stored === "swisstopo" || stored === "roads" ? stored : "osm";
   });
   const [browserSuggestions, setBrowserSuggestions] = useState<Record<string, BrowserLabelSuggestion>>({});
   const [sceneImagesReady, setSceneImagesReady] = useState<Record<string, boolean>>({});
   const labeler = useBrowserCrosswalkLabeler({
-    backendUrl: scanBackendUrl,
+    runName,
+    exportName,
     scenes: config?.scenes ?? [],
     tileSizeM: config?.tile_size_m ?? 25,
   });
-  const [sideTab, setSideTab] = useState<"review" | "builder" | "config">("review");
-  const [exporting, setExporting] = useState(false);
-  const [lastExportLabel, setLastExportLabel] = useState<string | null>(null);
+  const [isTerminalDrawerOpen, setIsTerminalDrawerOpen] = useState(false);
+  const [isCreateDatasetDrawerOpen, setIsCreateDatasetDrawerOpen] = useState(false);
+  const [newDatasetName, setNewDatasetName] = useState("");
+  const [newDatasetSceneId, setNewDatasetSceneId] = useState(DEFAULT_BROWSER_CONFIG.scenes[0]?.scene_id ?? "");
+  const [creatingDataset, setCreatingDataset] = useState(false);
+  const [creatingAutopilot, setCreatingAutopilot] = useState(false);
+  const [autopilotPreviewPlan, setAutopilotPreviewPlan] = useState<AutopilotPlan | null>(null);
+  const isMobileLayout = useMobileLayout();
+  const { activeRemoteJobId, setActiveRemoteJobId, activeRemoteJob, setActiveRemoteJob, remoteSnapshot } = useMobileRemoteJob(isMobileLayout);
+  const [mobileScanPanel, setMobileScanPanel] = useState<ReactNode>(null);
   const urlParams = useMemo(() => new URLSearchParams(window.location.search), []);
   const mapDebug = urlParams.get("mapDebug") === "1";
   const validationCase = urlParams.get("validationCase");
   const validationRunId = urlParams.get("validationRunId") ?? "manual";
 
   useEffect(() => {
-    Promise.all([listDatasets(), loadConfig()])
-      .then(([entries, loadedConfig]) => {
+    listDatasets()
+      .then((entries) => {
         setDatasets(entries);
-        setConfig(loadedConfig);
         const preferred =
-          entries.find(
-            (entry) => entry.run_name === loadedConfig.run_name && entry.export_name === loadedConfig.export_name,
-          ) ??
           entries.find((entry) => entry.run_name === FALLBACK_RUN && entry.export_name === FALLBACK_EXPORT) ??
           entries[0];
         if (preferred) {
@@ -93,7 +100,12 @@ export default function App() {
         setFocusSceneId(undefined);
       })
       .catch((reason) => {
-        if (!canceled) setError(String(reason));
+        if (canceled) return;
+        if (String(reason).includes("Unknown scene")) {
+          setError(null);
+          return;
+        }
+        setError(String(reason));
       });
     return () => {
       canceled = true;
@@ -101,22 +113,86 @@ export default function App() {
   }, [runName, exportName]);
 
   useEffect(() => {
+    let canceled = false;
+    loadConfig(runName, exportName)
+      .then((loadedConfig) => {
+        if (canceled) return;
+        setConfig(loadedConfig);
+      })
+      .catch((reason) => {
+        if (canceled) return;
+        if (String(reason).includes("Unknown scene")) {
+          setError(null);
+          return;
+        }
+        setError(String(reason));
+      });
+    return () => {
+      canceled = true;
+    };
+  }, [runName, exportName]);
+
+  useEffect(() => {
+    if (!config || !needsRealAutopilotPlanRefresh(config.autopilot)) return;
+    let canceled = false;
+    const stalePlan = config.autopilot;
+    loadAutopilotPlan(config.target_per_class, stalePlan.maxPanels, stalePlan.sceneBudget)
+      .then((nextPlan) => {
+        if (canceled) return null;
+        return saveConfig(runName, exportName, {
+          ...config,
+          target_per_class: nextPlan.targetPositiveCount,
+          tile_size_m: nextPlan.tileSizeM,
+          scenes: nextPlan.scenes,
+          autopilot: nextPlan,
+        });
+      })
+      .then((nextConfig) => {
+        if (canceled || !nextConfig) return;
+        setConfig(nextConfig);
+        setSceneCache({});
+        setReviewState((current) => ({
+          ...current,
+          selected_scene_id: nextConfig.scenes[0]?.scene_id,
+          selected_tile_id: undefined,
+        }));
+        setFocusSceneId(undefined);
+        void loadDatasetMeta(runName, exportName).then((nextSummary) => {
+          if (!canceled) setSummary(nextSummary);
+        });
+      })
+      .catch((reason) => {
+        if (!canceled) setError(String(reason));
+      });
+    return () => {
+      canceled = true;
+    };
+  }, [config, exportName, runName]);
+
+  useEffect(() => {
     window.localStorage.setItem("crosswalk-review:basemap", basemap);
   }, [basemap]);
 
   useEffect(() => {
-    window.localStorage.setItem("crosswalk.scan-backend-url", scanBackendUrl);
-  }, [scanBackendUrl]);
-
-  useEffect(() => {
+    if (!reviewStateReady || !summary) return;
     const selectedSceneId = reviewState.selected_scene_id;
     if (!selectedSceneId || sceneCache[selectedSceneId]) return;
+    if (summary && !summary.scenes.some((scene) => scene.scene_id === selectedSceneId)) {
+      const fallbackSceneId = summary.scenes[0]?.scene_id;
+      setReviewState((current) => ({
+        ...current,
+        selected_scene_id: fallbackSceneId,
+        selected_tile_id: undefined,
+      }));
+      setError(null);
+      return;
+    }
     let canceled = false;
     loadScene(runName, exportName, selectedSceneId)
       .then((payload) => {
         if (canceled) return;
         setSceneCache((current) => ({ ...current, [payload.scene.scene_id]: payload }));
-        setSceneImagesReady((current) => ({ ...current, [payload.scene.scene_id]: false }));
+        setSceneImagesReady((current) => ({ ...current, [payload.scene.scene_id]: true }));
         setSummary(payload.summary);
         setReviewState((current) => {
           const tileStillExists = current.selected_tile_id && payload.tiles.some((tile) => tile.tile_id === current.selected_tile_id);
@@ -127,7 +203,13 @@ export default function App() {
         });
       })
       .catch((reason) => {
-        if (!canceled) setError(String(reason));
+        if (!canceled) {
+          if (String(reason).includes("Unknown scene")) {
+            setError(null);
+            return;
+          }
+          setError(String(reason));
+        }
       });
     ensureSceneImages(runName, exportName, selectedSceneId)
       .then((imageUrls) => {
@@ -149,12 +231,18 @@ export default function App() {
         setSceneImagesReady((current) => ({ ...current, [selectedSceneId]: true }));
       })
       .catch((reason) => {
-        if (!canceled) setError(String(reason));
+        if (!canceled) {
+          if (String(reason).includes("Unknown scene")) {
+            setError(null);
+            return;
+          }
+          setError(String(reason));
+        }
       });
     return () => {
       canceled = true;
     };
-  }, [exportName, reviewState.selected_scene_id, runName, sceneCache]);
+  }, [exportName, reviewState.selected_scene_id, reviewStateReady, runName, sceneCache, summary]);
 
   useEffect(() => {
     if (!reviewStateReady) return;
@@ -173,12 +261,52 @@ export default function App() {
   const sceneTiles = scenePayload?.tiles ?? [];
   const selectedTile = sceneTiles.find((tile) => tile.tile_id === selectedTileId) ?? sceneTiles[0];
   const selectedSuggestion = selectedTile ? browserSuggestions[selectedTile.tile_id] : undefined;
-
-  useEffect(() => {
-    if (!selectedTile) return;
-    setDraftLabel(selectedTile.label);
-    setDraftSelected(selectedTile.selected);
-  }, [selectedTile?.tile_id]);
+  const visibleActiveRemoteJob = activeRemoteJob && scenes.some((scene) => scene.scene_id === activeRemoteJob.scene_id) ? activeRemoteJob : null;
+  const remoteScanActive = visibleActiveRemoteJob ? ACTIVE_REMOTE_STATUSES.has(visibleActiveRemoteJob.status) : false;
+  const remoteActiveTileId =
+    visibleActiveRemoteJob && selectedScene && visibleActiveRemoteJob.scene_id === selectedScene.scene_id
+      ? visibleActiveRemoteJob.live_scanned_tile_ids?.at(-1)
+      : undefined;
+  const sceneSuggestionTiles = useMemo(
+    () =>
+      sceneTiles
+        .filter((tile) => browserSuggestions[tile.tile_id])
+        .sort((left, right) => {
+          const leftSuggestion = browserSuggestions[left.tile_id];
+          const rightSuggestion = browserSuggestions[right.tile_id];
+          if (!leftSuggestion || !rightSuggestion) return 0;
+          if (leftSuggestion.label !== rightSuggestion.label) {
+            return leftSuggestion.label === "crosswalk" ? -1 : 1;
+          }
+          return rightSuggestion.score - leftSuggestion.score;
+        }),
+    [browserSuggestions, sceneTiles],
+  );
+  const scenePositiveSuggestionCount = useMemo(
+    () => sceneSuggestionTiles.filter((tile) => browserSuggestions[tile.tile_id]?.label === "crosswalk").length,
+    [browserSuggestions, sceneSuggestionTiles],
+  );
+  const selectedSceneReviewState = sceneReviewStateFor(reviewState, selectedScene?.scene_id);
+  const selectedSceneAutopilotMode = Boolean(selectedScene?.autopilot_cell_id);
+  const { derivedTileSizeM, orderedScanTiles } = useSceneFootprint({
+    scene: selectedScene,
+    sceneTiles,
+    sceneReviewState: selectedSceneReviewState,
+    mode: selectedSceneAutopilotMode ? "scene" : "radius",
+  });
+  const currentScanJob = useMemo(() => {
+    if (!summary || !selectedScene || orderedScanTiles.length === 0) return null;
+    return buildScanBatchJob({
+      summary,
+      scene: selectedScene,
+      tileSizeM: derivedTileSizeM,
+      scanRadiusTiles: selectedSceneReviewState.scan_radius,
+      threshold: REMOTE_SCAN_THRESHOLD,
+      promptsText: labeler.defaultPromptText,
+      tiles: orderedScanTiles,
+    });
+  }, [derivedTileSizeM, labeler.defaultPromptText, orderedScanTiles, selectedScene, selectedSceneReviewState.scan_radius, summary]);
+  const mapAutopilotPlan = asAutopilotPlan(config?.autopilot) ?? autopilotPreviewPlan;
 
   useEffect(() => {
     if (labeler.status !== "idle") return;
@@ -190,12 +318,6 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [labeler]);
 
-  const stats = summary ?? {
-    selected_crosswalk: 0,
-    selected_no_crosswalk: 0,
-    dropped_tiles: 0,
-    selected_tiles: 0,
-  };
   const persistedReviewChecksum = useMemo(() => checksum(reviewState), [reviewState]);
 
   async function commit(label: string, selected: boolean) {
@@ -207,8 +329,6 @@ export default function App() {
       setSceneCache((current) => ({ ...current, [payload.scene.scene_id]: payload }));
       const refreshedTile = payload.tiles.find((tile) => tile.tile_id === selectedTile.tile_id) ?? payload.tiles[0];
       setReviewState((current) => ({ ...current, selected_tile_id: refreshedTile?.tile_id }));
-      setDraftLabel(refreshedTile?.label ?? label);
-      setDraftSelected(refreshedTile?.selected ?? selected);
       setError(null);
     } catch (reason) {
       setError(String(reason));
@@ -221,8 +341,9 @@ export default function App() {
     if (!config) return;
     setSaving(true);
     try {
-      const nextConfig = await saveConfig(config);
+      const nextConfig = await saveConfig(runName, exportName, config);
       setConfig(nextConfig);
+      setDatasets(await listDatasets());
       setError(null);
     } catch (reason) {
       setError(String(reason));
@@ -231,9 +352,131 @@ export default function App() {
     }
   }
 
+  async function handleCreateDataset() {
+    setCreatingDataset(true);
+    try {
+      const created = await createDataset(newDatasetName, newDatasetSceneId);
+      const entries = await listDatasets();
+      setDatasets(entries);
+      setRunName(created.run_name);
+      setExportName(created.export_name);
+      setNewDatasetName("");
+      setNewDatasetSceneId(DEFAULT_BROWSER_CONFIG.scenes[0]?.scene_id ?? "");
+      setIsCreateDatasetDrawerOpen(false);
+      setActiveRemoteJobId(null);
+      setActiveRemoteJob(null);
+      setError(null);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setCreatingDataset(false);
+    }
+  }
+
+  async function handleCreateAutopilotDataset(input: { targetPositiveCount: number; maxPanels?: number; perimeterBudget?: number }) {
+    setCreatingAutopilot(true);
+    try {
+      const created = await createAutopilotDataset(input.targetPositiveCount, undefined, input.maxPanels, input.perimeterBudget);
+      const entries = await listDatasets();
+      setDatasets(entries);
+      setRunName(created.run_name);
+      setExportName(created.export_name);
+      setSceneCache({});
+      setBrowserSuggestions({});
+      setFocusSceneId(undefined);
+      setActiveRemoteJobId(null);
+      setActiveRemoteJob(null);
+      setError(null);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setCreatingAutopilot(false);
+    }
+  }
+
   const handleZoomChange = useCallback((zoom: number) => {
     setReviewState((current) => (current.map_zoom === zoom ? current : { ...current, map_zoom: zoom }));
   }, []);
+
+  const importScanResult = useCallback(
+    (result: ScanBatchResult) => {
+      const sceneId = result.job.scene.scene_id;
+      const firstCrosswalkTileId = result.tiles.find((tile) => tile.label === "crosswalk")?.tile_id;
+      const firstTileId = result.tiles[0]?.tile_id;
+
+      setBrowserSuggestions((current) => ({
+        ...current,
+        ...result.results,
+      }));
+      setReviewState((current) => ({
+        ...current,
+        selected_scene_id: sceneId,
+        selected_tile_id:
+          current.selected_scene_id === sceneId && current.selected_tile_id
+            ? current.selected_tile_id
+            : firstCrosswalkTileId ?? firstTileId ?? current.selected_tile_id,
+        scenes: {
+          ...current.scenes,
+          [sceneId]: {
+            ...sceneReviewStateFor(current, sceneId),
+            scanned_tile_ids: result.tiles.map((tile) => tile.tile_id),
+          },
+        },
+      }));
+      setFocusSceneId(sceneId);
+    },
+    [setBrowserSuggestions, setReviewState],
+  );
+
+  useEffect(() => {
+    const job = activeRemoteJob;
+    if (!job?.scene_id) return;
+    if (!scenes.some((scene) => scene.scene_id === job.scene_id)) return;
+    const liveScannedTileIds = job.live_scanned_tile_ids ?? [];
+    const liveResults = job.live_results ?? {};
+    if (!liveScannedTileIds.length && !Object.keys(liveResults).length) {
+      return;
+    }
+    const sceneId = job.scene_id;
+    setBrowserSuggestions((current) => ({
+      ...current,
+      ...liveResults,
+    }));
+    setReviewState((current) => ({
+      ...current,
+      scenes: {
+        ...current.scenes,
+        [sceneId]: {
+          ...sceneReviewStateFor(current, sceneId),
+          scanned_tile_ids:
+            liveScannedTileIds.length > 0
+              ? liveScannedTileIds
+              : sceneReviewStateFor(current, sceneId).scanned_tile_ids,
+        },
+      },
+    }));
+    setFocusSceneId((current) => current ?? sceneId);
+  }, [activeRemoteJob, scenes]);
+
+  const jumpToSceneSuggestion = useCallback(
+    (mode: "next" | "positive") => {
+      if (!sceneSuggestionTiles.length) return;
+      const pool =
+        mode === "positive"
+          ? sceneSuggestionTiles.filter((tile) => browserSuggestions[tile.tile_id]?.label === "crosswalk")
+          : sceneSuggestionTiles;
+      if (!pool.length) return;
+      const currentIndex = pool.findIndex((tile) => tile.tile_id === selectedTile?.tile_id);
+      const nextTile = pool[(currentIndex + 1 + pool.length) % pool.length] ?? pool[0];
+      if (!nextTile) return;
+      setReviewState((current) => ({
+        ...current,
+        selected_scene_id: nextTile.scene_id,
+        selected_tile_id: nextTile.tile_id,
+      }));
+    },
+    [browserSuggestions, sceneSuggestionTiles, selectedTile?.tile_id],
+  );
 
   const handleSceneReviewStateChange = useCallback(
     (nextSceneState: ReturnType<typeof sceneReviewStateFor>) => {
@@ -315,7 +558,7 @@ export default function App() {
     const payload = await loadScene(runName, exportName, selectedScene.scene_id);
     setSceneCache((current) => ({ ...current, [payload.scene.scene_id]: payload }));
     setSummary(payload.summary);
-    setSceneImagesReady((current) => ({ ...current, [payload.scene.scene_id]: false }));
+    setSceneImagesReady((current) => ({ ...current, [payload.scene.scene_id]: true }));
     setReviewState((current) => {
       const tileStillExists = current.selected_tile_id && payload.tiles.some((tile) => tile.tile_id === current.selected_tile_id);
       return {
@@ -325,191 +568,133 @@ export default function App() {
     });
   }, [exportName, runName, sceneCache, selectedScene]);
 
+  useEffect(() => {
+    if (error?.includes("Unknown scene")) {
+      setError(null);
+      return;
+    }
+    if (!error) {
+      setIsErrorDrawerOpen(false);
+    }
+  }, [error]);
+
+  const errorSummary = useMemo(() => summarizeErrorMessage(error, "Something went wrong."), [error]);
+  const createDatasetSceneOptions = useMemo(() => DEFAULT_BROWSER_CONFIG.scenes.map((scene) => ({ scene_id: scene.scene_id, city: scene.city, split: scene.split })), []);
+
   return (
-    <div className="shell">
-      <header className="topbar topbar-compact">
-        <div className="topbar-main">
-          <p className="eyebrow">Crosswalk review</p>
-          <h1 className="title-compact">Review Desk</h1>
-        </div>
-        <div className="topbar-controls">
-          <label className="dataset-control">
-            <span className="eyebrow">Dataset</span>
-            <div className="topbar-dataset-row">
-              <select
-                value={`${runName}::${exportName}`}
-                onChange={(event) => {
-                  const [nextRun, nextExport] = event.target.value.split("::");
-                  setRunName(nextRun);
-                  setExportName(nextExport);
-                }}
-              >
-                {datasets.map((entry) => (
-                  <option key={`${entry.run_name}::${entry.export_name}`} value={`${entry.run_name}::${entry.export_name}`}>
-                    {entry.run_name}/{entry.export_name} ({entry.tile_count})
-                  </option>
-                ))}
-              </select>
-              <button
-                className="primary"
-                disabled={exporting}
-                onClick={async () => {
-                  setExporting(true);
-                  try {
-                    const result = await exportBrowserDatasetZip();
-                    setLastExportLabel(`${result.selectedCount} tiles exported`);
-                    setError(null);
-                  } catch (reason) {
-                    setError(String(reason));
-                  } finally {
-                    setExporting(false);
-                  }
-                }}
-                type="button"
-              >
-                {exporting ? "Exporting" : "Export ZIP"}
-              </button>
-            </div>
-          </label>
-          {lastExportLabel ? <p className="eyebrow topbar-export-note">{lastExportLabel}</p> : null}
-          <div className="metric-grid">
-            <div className="metric-card">
-              <span className="metric-label">Crosswalk</span>
-              <strong>{stats.selected_crosswalk}</strong>
-            </div>
-            <div className="metric-card">
-              <span className="metric-label">No Crosswalk</span>
-              <strong>{stats.selected_no_crosswalk}</strong>
-            </div>
-            <div className="metric-card">
-              <span className="metric-label">Dropped</span>
-              <strong>{stats.dropped_tiles}</strong>
-            </div>
-            <div className="metric-card">
-              <span className="metric-label">Selected</span>
-              <strong>{stats.selected_tiles}</strong>
-            </div>
-          </div>
-        </div>
-      </header>
+    <div className="h-dvh overflow-hidden bg-content2 text-foreground">
+      <div className="relative h-full w-full">
+        <SceneMap
+          summary={summary}
+          selectedSceneId={selectedScene?.scene_id}
+          focusSceneId={focusSceneId}
+          sceneTiles={sceneTiles}
+          selectedTileId={selectedTile?.tile_id}
+          mapZoom={mapZoom}
+          reviewState={selectedSceneReviewState}
+          mapDebug={mapDebug}
+          validationCase={validationCase}
+          validationRunId={validationRunId}
+          persistedReviewChecksum={persistedReviewChecksum}
+          persistedReviewState={reviewState}
+          basemap={basemap}
+          autopilotPlan={mapAutopilotPlan}
+          isMobileLayout={isMobileLayout}
+          onMobileScanPanelChange={setMobileScanPanel}
+          labeler={labeler}
+          browserSuggestions={browserSuggestions}
+          remoteActiveTileId={remoteActiveTileId}
+          remoteScanActive={remoteScanActive}
+          sceneTilesReady={sceneTiles.length > 0}
+          sceneImagesReady={selectedScene ? sceneImagesReady[selectedScene.scene_id] !== false : false}
+          onSuggestionsChange={setBrowserSuggestions}
+          onError={setError}
+          onEnsureSceneTiles={handleEnsureSceneTiles}
+          onEnsureSceneImages={handleEnsureSceneImages}
+          onZoomChange={handleZoomChange}
+          onReviewStateChange={handleSceneReviewStateChange}
+          onBasemapChange={setBasemap}
+          onSelectScene={handleSelectScene}
+          onSelectTile={handleSelectTile}
+        />
 
-      <main className="layout">
-        <section className="canvas-stack">
-          {error ? <div className="error">{error}</div> : null}
-
-          <SceneMap
-            summary={summary}
-            selectedSceneId={selectedScene?.scene_id}
-            focusSceneId={focusSceneId}
-            sceneTiles={sceneTiles}
-            selectedTileId={selectedTile?.tile_id}
-            mapZoom={mapZoom}
-            reviewState={sceneReviewStateFor(reviewState, selectedScene?.scene_id)}
-            mapDebug={mapDebug}
-            validationCase={validationCase}
-            validationRunId={validationRunId}
-            persistedReviewChecksum={persistedReviewChecksum}
-            persistedReviewState={reviewState}
+        <div className="pointer-events-none absolute inset-0 z-[1000]">
+          <AppOverlayPanels
+            activeRemoteJobId={activeRemoteJobId}
             basemap={basemap}
-            labeler={labeler}
-            browserSuggestions={browserSuggestions}
-            sceneTilesReady={sceneTiles.length > 0}
-            sceneImagesReady={selectedScene ? sceneImagesReady[selectedScene.scene_id] !== false : false}
-            onSuggestionsChange={setBrowserSuggestions}
-            onError={setError}
-            onEnsureSceneTiles={handleEnsureSceneTiles}
-            onEnsureSceneImages={handleEnsureSceneImages}
-            onZoomChange={handleZoomChange}
-            onReviewStateChange={handleSceneReviewStateChange}
+            browserSuggestion={selectedSuggestion}
+            config={config}
+            creatingAutopilot={creatingAutopilot}
+            datasets={datasets}
+            errorSummary={error ? errorSummary : null}
+            exportName={exportName}
+            isMobileLayout={isMobileLayout}
+            mobileScanPanel={mobileScanPanel}
+            remoteSnapshot={remoteSnapshot}
+            runName={runName}
+            scanJob={currentScanJob}
+            scene={selectedScene}
+            sceneSuggestionCount={sceneSuggestionTiles.length}
+            selectedTile={selectedTile}
+            serverJob={visibleActiveRemoteJob}
+            summary={summary}
+            saving={saving}
+            onActiveRemoteJobChange={setActiveRemoteJobId}
+            onActiveRemoteJobResolved={setActiveRemoteJob}
+            onApplySuggestion={
+              selectedSuggestion
+                ? () => {
+                    void commit(selectedSuggestion.label, selectedSuggestion.selected);
+                  }
+                : undefined
+            }
             onBasemapChange={setBasemap}
-            onSelectScene={handleSelectScene}
-            onSelectTile={handleSelectTile}
+            onCommit={commit}
+            onCreateAutopilot={(input) => {
+              void handleCreateAutopilotDataset(input);
+            }}
+            onCreateDataset={() => {
+              setNewDatasetSceneId(selectedSceneId ?? DEFAULT_BROWSER_CONFIG.scenes[0]?.scene_id ?? "");
+              setIsCreateDatasetDrawerOpen(true);
+            }}
+            onDatasetSelect={(value) => {
+              const [nextRun, nextExport] = value.split("::");
+              setRunName(nextRun);
+              setExportName(nextExport);
+              setActiveRemoteJobId(null);
+              setActiveRemoteJob(null);
+            }}
+            onError={setError}
+            onJumpToNextSuggestion={() => jumpToSceneSuggestion("next")}
+            onJumpToNextPositive={() => jumpToSceneSuggestion("positive")}
+            onOpenErrorDetails={() => setIsErrorDrawerOpen(true)}
+            onOpenTerminal={() => setIsTerminalDrawerOpen(true)}
+            onPreviewPlanChange={setAutopilotPreviewPlan}
+            onResultImported={importScanResult}
           />
-        </section>
+        </div>
+      </div>
 
-        <section className="side-stack side-panel panel">
-          <div className="side-panel-header">
-            <div>
-              <p className="eyebrow">Controls</p>
-              <h2>{sideTab === "review" ? "Tile review" : sideTab === "builder" ? "Browser builder" : "Dataset config"}</h2>
-            </div>
-            <div className="pill-row">
-              <button className={`pill pill-button ${sideTab === "review" ? "active" : ""}`} onClick={() => setSideTab("review")} type="button">
-                Review
-              </button>
-              <button className={`pill pill-button ${sideTab === "builder" ? "active" : ""}`} onClick={() => setSideTab("builder")} type="button">
-                Builder
-              </button>
-              <button className={`pill pill-button ${sideTab === "config" ? "active" : ""}`} onClick={() => setSideTab("config")} type="button">
-                Config
-              </button>
-            </div>
-          </div>
-
-          {sideTab === "review" ? (
-            <Inspector
-              scene={selectedScene}
-              tile={selectedTile}
-              browserSuggestion={selectedSuggestion}
-              draftLabel={draftLabel}
-              draftSelected={draftSelected}
-              onDraftLabel={setDraftLabel}
-              onDraftSelected={setDraftSelected}
-              onCommit={commit}
-              onReset={() => {
-                if (!selectedTile) return;
-                setDraftLabel(selectedTile.label);
-                setDraftSelected(selectedTile.selected);
-              }}
-              saving={saving}
-            />
-          ) : null}
-          {sideTab === "builder" ? (
-            <BrowserDatasetBuilder
-              exportName={exportName}
-              labeler={labeler}
-              backendUrl={scanBackendUrl}
-              onBackendUrlChange={setScanBackendUrl}
-              onApplied={(payload) => {
-                if (!selectedScene?.scene_id) return;
-                setSummary(payload.summary);
-                setSceneCache((current) => ({
-                  ...current,
-                  [selectedScene.scene_id]: {
-                    ...payload,
-                  },
-                }));
-              }}
-              onError={setError}
-              onSuggestionsChange={setBrowserSuggestions}
-              runName={runName}
-              scene={selectedScene}
-              sceneTiles={sceneTiles}
-              suggestions={browserSuggestions}
-            />
-          ) : null}
-          {sideTab === "config" ? (
-            <ConfigEditor
-              config={config}
-              backendUrl={scanBackendUrl}
-              backendHealth={labeler.health}
-              onBackendUrlChange={setScanBackendUrl}
-              onCheckBackend={() => void labeler.ensureReady()}
-              onChange={setConfig}
-              onSave={handleSaveConfig}
-              saving={saving}
-            />
-          ) : null}
-        </section>
-      </main>
-
-      <footer className="statusbar">
-        {summary
-          ? `${summary.run_name}/${summary.export_name} · ${summary.total_tiles} total tiles · ${
-              selectedScene ? `${sceneTiles.length} loaded in ${selectedScene.city}` : "pick a city on the map"
-            }`
-          : "Loading dataset…"}
-      </footer>
+      <AppDrawers
+        activeRemoteJob={activeRemoteJob}
+        creatingDataset={creatingDataset}
+        error={error}
+        isCreateDatasetDrawerOpen={isCreateDatasetDrawerOpen}
+        isErrorDrawerOpen={isErrorDrawerOpen}
+        isMobileLayout={isMobileLayout}
+        isTerminalDrawerOpen={isTerminalDrawerOpen}
+        newDatasetName={newDatasetName}
+        newDatasetSceneId={newDatasetSceneId}
+        sceneOptions={createDatasetSceneOptions}
+        onCreateDataset={() => {
+          void handleCreateDataset();
+        }}
+        onCreateDatasetOpenChange={setIsCreateDatasetDrawerOpen}
+        onErrorOpenChange={setIsErrorDrawerOpen}
+        onNameChange={setNewDatasetName}
+        onSceneChange={setNewDatasetSceneId}
+        onTerminalOpenChange={setIsTerminalDrawerOpen}
+      />
     </div>
   );
 }

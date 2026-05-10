@@ -1,45 +1,27 @@
-import type { Dispatch, SetStateAction } from "react";
+import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Card } from "@heroui/react";
 import type { Map as LeafletMap } from "leaflet";
-import { Circle, CircleMarker, MapContainer, Rectangle, TileLayer } from "react-leaflet";
+import { MapContainer } from "react-leaflet";
+import type { AutopilotBvhCell, AutopilotPlan } from "../autopilot-planner";
 import type { BrowserCrosswalkLabelerHandle } from "../hooks/useBrowserCrosswalkLabeler";
+import { useSceneFootprint } from "../hooks/useSceneFootprint";
 import { buildScanBatchJob, exportScanBatchJob, readScanBatchResultFile } from "../scan-batch";
-import { validationClassSuffix, type ValidationInteractionPhase, type ValidationPoint } from "../map-validation";
-import { MAP_BASEMAPS } from "../map-basemaps";
+import { type ValidationInteractionPhase, type ValidationPoint } from "../map-validation";
 import { normalizeSceneReviewState } from "../review-state";
 import type { BrowserLabelSuggestion, DatasetSummary, DatasetTile, MapBasemap, ReviewState, SceneReviewState } from "../types";
 import { useMapValidationRuntime } from "../useMapValidationRuntime";
 import {
-  bboxAverageSizeM,
-  bboxCenterLatLng,
-  bboxToMercatorRect,
-  bboxToLatLngBounds,
-  circleIntersectsMercatorRect,
   formatProbability,
-  mercatorToLatLng,
   sceneLabel,
   sceneLatLngBounds,
-  sceneMercatorCenter,
   sortScenes,
-  tileTone,
 } from "../utils";
-import { MapEventBridge } from "./MapEventBridge";
-import { MapCamera } from "./MapCamera";
 import { MapScanControls } from "./MapScanControls";
 import { MapValidationPanel } from "./MapValidationPanel";
-const DEFAULT_MAP_CENTER: [number, number] = [46.8, 8.25];
-const GRID_ZOOM_THRESHOLD = 16;
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
-
-function dashArrayForZoom(zoom: number, on: number, off: number, minimum = 2) {
-  const scale = clamp(0.34 + (zoom - GRID_ZOOM_THRESHOLD) * 0.32, 0.22, 1.8);
-  const dashOn = Math.max(minimum, Math.round(on * scale));
-  const dashOff = Math.max(minimum, Math.round(off * scale));
-  return `${dashOn} ${dashOff}`;
-}
+import { SceneBasemapSwitch } from "./SceneBasemapSwitch";
+import { SceneMapLayers } from "./SceneMapLayers";
+import { DEFAULT_MAP_CENTER, GRID_ZOOM_THRESHOLD, REMOTE_SCAN_THRESHOLD, clamp, dashArrayForZoom, snapBboxToLeafletTileGrid } from "./scene-map-geometry";
 
 type SceneMapProps = {
   summary?: DatasetSummary | null;
@@ -55,8 +37,13 @@ type SceneMapProps = {
   persistedReviewChecksum: string;
   persistedReviewState: ReviewState;
   basemap: MapBasemap;
+  autopilotPlan?: unknown;
+  isMobileLayout?: boolean;
+  onMobileScanPanelChange?: (panel: ReactNode | null) => void;
   labeler: BrowserCrosswalkLabelerHandle;
   browserSuggestions: Record<string, BrowserLabelSuggestion>;
+  remoteActiveTileId?: string;
+  remoteScanActive?: boolean;
   sceneTilesReady: boolean;
   sceneImagesReady: boolean;
   onSuggestionsChange: Dispatch<SetStateAction<Record<string, BrowserLabelSuggestion>>>;
@@ -84,8 +71,13 @@ export function SceneMap({
   persistedReviewChecksum,
   persistedReviewState,
   basemap,
+  autopilotPlan,
+  isMobileLayout = false,
+  onMobileScanPanelChange,
   labeler,
   browserSuggestions,
+  remoteActiveTileId,
+  remoteScanActive = false,
   sceneTilesReady,
   sceneImagesReady,
   onSuggestionsChange,
@@ -120,57 +112,44 @@ export function SceneMap({
 
   const scenes = useMemo(() => summary?.scenes.slice().sort(sortScenes) ?? [], [summary]);
   const selectedScene = scenes.find((scene) => scene.scene_id === selectedSceneId);
-  const focusedScene = scenes.find((scene) => scene.scene_id === (focusSceneId ?? selectedSceneId));
-  const selectedBounds = useMemo(() => (focusedScene ? sceneLatLngBounds(focusedScene) : null), [focusedScene?.scene_id, focusedScene?.latitude, focusedScene?.longitude, focusedScene?.size_m]);
+  const visibleAutopilotPlan = useMemo(() => {
+    const candidate = autopilotPlan as Partial<AutopilotPlan> | undefined;
+    return candidate?.mode === "swiss-lowres-urban-grid" && Array.isArray(candidate.cells) ? (candidate as AutopilotPlan) : null;
+  }, [autopilotPlan]);
+  const focusedSceneId = focusSceneId ?? (visibleAutopilotPlan ? undefined : selectedSceneId);
+  const focusedScene = scenes.find((scene) => scene.scene_id === focusedSceneId);
+  const selectedBounds = useMemo(() => {
+    if (focusedScene) return sceneLatLngBounds(focusedScene);
+    if (visibleAutopilotPlan && !focusSceneId) return bboxToLatLngBounds(visibleAutopilotPlan.coarseGrid.bboxMercator);
+    return null;
+  }, [focusSceneId, focusedScene?.scene_id, focusedScene?.latitude, focusedScene?.longitude, focusedScene?.size_m, visibleAutopilotPlan]);
   const mapCenter = useMemo<[number, number]>(() => (selectedScene?.latitude && selectedScene?.longitude ? [Number(selectedScene.latitude), Number(selectedScene.longitude)] : DEFAULT_MAP_CENTER), [selectedScene?.latitude, selectedScene?.longitude]);
   const effectiveMapZoom = mapInstance?.getZoom() ?? mapZoom;
+  const showAutopilotDetailGrid = effectiveMapZoom >= 10;
+  const cityFineGridCells = useMemo(
+    () => visibleAutopilotPlan?.coarseCells.filter((cell) => cell.status !== "background") ?? [],
+    [visibleAutopilotPlan],
+  );
+  const bvhOverlayCells = useMemo(() => {
+    const cells = visibleAutopilotPlan?.bvhCells ?? [];
+    if (!cells.length) return [];
+    return cells.map((cell) => ({
+      ...cell,
+      bboxMercator: snapBboxToLeafletTileGrid(cell.bboxMercator, cell.sizeM ?? visibleAutopilotPlan.sceneSizeM),
+    }));
+  }, [visibleAutopilotPlan]);
   const showGrid = Boolean(selectedScene && sceneTiles.length && effectiveMapZoom >= GRID_ZOOM_THRESHOLD);
   const sceneReviewState = useMemo(() => normalizeSceneReviewState(reviewState), [reviewState]);
+  const autopilotSceneMode = Boolean(selectedScene?.autopilot_cell_id);
   const [liveSuggestions, setLiveSuggestions] = useState<Record<string, BrowserLabelSuggestion>>({});
   const displaySuggestions = useMemo(() => ({ ...browserSuggestions, ...liveSuggestions }), [browserSuggestions, liveSuggestions]);
-
-  const gridStats = useMemo(() => {
-    if (!sceneTiles.length) return null;
-    const rows = sceneTiles.map((tile) => tile.row);
-    const cols = sceneTiles.map((tile) => tile.col);
-    const minRow = Math.min(...rows);
-    const maxRow = Math.max(...rows);
-    const minCol = Math.min(...cols);
-    const maxCol = Math.max(...cols);
-    const centerRow = (minRow + maxRow) / 2;
-    const centerCol = (minCol + maxCol) / 2;
-    return { minRow, maxRow, minCol, maxCol, centerRow, centerCol };
-  }, [sceneTiles]);
-
-  const averageTileSizeM = useMemo(() => sceneTiles.reduce((sum, tile) => sum + bboxAverageSizeM(tile.bbox_mercator), 0) / Math.max(1, sceneTiles.length), [sceneTiles]);
-  const footprintCenterMercator = useMemo(() => {
-    if (selectedScene) {
-      return sceneMercatorCenter(selectedScene);
-    }
-    if (!gridStats || !sceneTiles.length) return null;
-    const centerCandidates = sceneTiles.filter(
-      (tile) => Math.abs(tile.row - gridStats.centerRow) <= 0.5 && Math.abs(tile.col - gridStats.centerCol) <= 0.5,
-    );
-    if (!centerCandidates.length) return null;
-    const rects = centerCandidates.map((tile) => bboxToMercatorRect(tile.bbox_mercator)).filter(Boolean);
-    if (!rects.length) return null;
-    const minX = Math.min(...rects.map((rect) => rect!.minX));
-    const minY = Math.min(...rects.map((rect) => rect!.minY));
-    const maxX = Math.max(...rects.map((rect) => rect!.maxX));
-    const maxY = Math.max(...rects.map((rect) => rect!.maxY));
-    return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
-  }, [gridStats, sceneTiles, selectedScene]);
-  const footprintRadiusM = useMemo(() => Math.max(averageTileSizeM * sceneReviewState.scan_radius, averageTileSizeM * 1.5), [averageTileSizeM, sceneReviewState.scan_radius]);
-  const footprintTiles = useMemo(() => {
-    if (!footprintCenterMercator) return [];
-    return sceneTiles.filter((tile) => {
-      const rect = bboxToMercatorRect(tile.bbox_mercator);
-      return rect ? circleIntersectsMercatorRect(rect, footprintCenterMercator.x, footprintCenterMercator.y, footprintRadiusM) : false;
+  const { derivedTileSizeM, footprintCenter, footprintCenterMercator, footprintRadiusM, footprintTileIds, footprintTiles, orderedScanTiles } =
+    useSceneFootprint({
+      scene: selectedScene,
+      sceneTiles,
+      sceneReviewState,
+      mode: autopilotSceneMode ? "scene" : "radius",
     });
-  }, [footprintCenterMercator, footprintRadiusM, sceneTiles]);
-
-  const footprintTileIds = useMemo(() => new Set(footprintTiles.map((tile) => tile.tile_id)), [footprintTiles]);
-  const orderedScanTiles = useMemo(() => footprintTiles.slice().sort((a, b) => a.row - b.row || a.col - b.col || a.tile_id.localeCompare(b.tile_id)), [footprintTiles]);
   const persistedScannedTileIds = useMemo(() => sceneReviewState.scanned_tile_ids.filter((tileId) => footprintTileIds.has(tileId)), [footprintTileIds, sceneReviewState.scanned_tile_ids]);
   const scannedTileIds = useMemo(() => {
     if (runtimeScanCount == null) {
@@ -179,13 +158,10 @@ export function SceneMap({
     return orderedScanTiles.slice(0, runtimeScanCount).map((tile) => tile.tile_id);
   }, [orderedScanTiles, persistedScannedTileIds, runtimeScanCount]);
   const scannedTileIdSet = useMemo(() => new Set(scannedTileIds), [scannedTileIds]);
-  const footprintCenter = useMemo<[number, number] | null>(() => (footprintCenterMercator ? mercatorToLatLng(footprintCenterMercator.x, footprintCenterMercator.y) : null), [footprintCenterMercator]);
   const scanFocusBounds = useMemo(() => (footprintCenterMercator ? bboxToLatLngBounds([footprintCenterMercator.x - footprintRadiusM, footprintCenterMercator.y - footprintRadiusM, footprintCenterMercator.x + footprintRadiusM, footprintCenterMercator.y + footprintRadiusM]) : selectedBounds), [footprintCenterMercator, footprintRadiusM, selectedBounds]);
   const scanCircleDashArray = useMemo(() => dashArrayForZoom(effectiveMapZoom, 10, 8), [effectiveMapZoom]);
   const droppedTileDashArray = useMemo(() => dashArrayForZoom(effectiveMapZoom, 6, 8), [effectiveMapZoom]);
   const activeTileDashArray = useMemo(() => dashArrayForZoom(effectiveMapZoom, 6, 6), [effectiveMapZoom]);
-  const basemapConfig = MAP_BASEMAPS[basemap];
-  const derivedTileSizeM = useMemo(() => Math.max(1, Math.round(averageTileSizeM || 25)), [averageTileSizeM]);
 
   useEffect(() => {
     setScanRunning(false);
@@ -256,15 +232,18 @@ export function SceneMap({
   }, [displaySuggestions, orderedScanTiles, scannedTileIdSet]);
 
   const activeTile = useMemo(() => {
-    if (!scanRunning) return undefined;
-    if (labeler.progress.currentTileId) {
+    if (scanRunning && labeler.progress.currentTileId) {
       return orderedScanTiles.find((tile) => tile.tile_id === labeler.progress.currentTileId);
     }
-    const activeIndex = Math.min(runtimeScanCount ?? 0, Math.max(orderedScanTiles.length - 1, 0));
-    return orderedScanTiles[activeIndex];
-  }, [labeler.progress.currentTileId, orderedScanTiles, runtimeScanCount, scanRunning]);
-  const activeTileBounds = useMemo(() => (activeTile ? bboxToLatLngBounds(activeTile.bbox_mercator) : null), [activeTile?.bbox_mercator, activeTile?.tile_id]);
-  const activeTileCenter = useMemo(() => (activeTile ? bboxCenterLatLng(activeTile.bbox_mercator) : null), [activeTile?.bbox_mercator, activeTile?.tile_id]);
+    if (scanRunning) {
+      const activeIndex = Math.min(runtimeScanCount ?? 0, Math.max(orderedScanTiles.length - 1, 0));
+      return orderedScanTiles[activeIndex];
+    }
+    if (remoteActiveTileId) {
+      return orderedScanTiles.find((tile) => tile.tile_id === remoteActiveTileId) ?? sceneTiles.find((tile) => tile.tile_id === remoteActiveTileId);
+    }
+    return undefined;
+  }, [labeler.progress.currentTileId, orderedScanTiles, remoteActiveTileId, remoteScanActive, runtimeScanCount, scanRunning, sceneTiles]);
   const liveScanStep = scanCounts.scanned + (scanRunning && activeTile ? 1 : 0);
   const activeSuggestion = activeTile ? displaySuggestions[activeTile.tile_id] : undefined;
   const activeSummary = scanPreparing
@@ -277,6 +256,66 @@ export function SceneMap({
         : `Classifying ${activeTile.relative_path}`
       : null;
   const selectedTile = useMemo(() => sceneTiles.find((tile) => tile.tile_id === selectedTileId) ?? orderedScanTiles[0] ?? sceneTiles[0], [orderedScanTiles, sceneTiles, selectedTileId]);
+  const mobileScanPanel = useMemo(
+    () => (
+      <MapScanControls
+        activeSummary={activeSummary}
+        autopilotMode={autopilotSceneMode}
+        crosswalkCount={scanCounts.crosswalk}
+        isMobileLayout
+        liveScanStep={liveScanStep}
+        mapZoom={effectiveMapZoom}
+        noCrosswalkCount={scanCounts.noCrosswalk}
+        onPauseScan={() => {
+          scanAbortRef.current = true;
+          setScanRunning(false);
+          setScanPreparing(false);
+          setInteractionPhase("idle");
+        }}
+        scanPreparing={scanPreparing}
+        sceneTilesReady={sceneTilesReady}
+        sceneImagesReady={sceneImagesReady}
+        onScanDelayChange={setScanDelay}
+        onScanRadiusChange={setScanRadius}
+        onStartScan={handleStartScan}
+        onExportBatchJob={handleExportBatchJob}
+        onImportBatchResult={handleImportBatchResult}
+        scanDelay={sceneReviewState.scan_delay_ms}
+        scanQueued={scanQueued}
+        scanRadius={sceneReviewState.scan_radius}
+        scanRunning={scanRunning}
+        scannedCount={scanCounts.scanned}
+        sceneLabel={selectedScene ? sceneLabel(selectedScene) : "World overview"}
+        showGrid={showGrid}
+        totalTilesInCircle={scanCounts.total}
+      />
+    ),
+    [
+      activeSummary,
+      autopilotSceneMode,
+      effectiveMapZoom,
+      handleExportBatchJob,
+      handleImportBatchResult,
+      handleStartScan,
+      isMobileLayout,
+      liveScanStep,
+      scanCounts.crosswalk,
+      scanCounts.noCrosswalk,
+      scanCounts.scanned,
+      scanCounts.total,
+      scanPreparing,
+      scanQueued,
+      scanRunning,
+      sceneImagesReady,
+      sceneReviewState.scan_delay_ms,
+      sceneReviewState.scan_radius,
+      sceneTilesReady,
+      selectedScene,
+      setScanDelay,
+      setScanRadius,
+      showGrid,
+    ],
+  );
 
   const flushLiveSuggestions = useCallback((force = false) => {
     if (!force && liveSuggestionsFlushRef.current != null) {
@@ -296,6 +335,33 @@ export function SceneMap({
     }
     liveSuggestionsFlushRef.current = window.requestAnimationFrame(commit);
   }, []);
+
+  useEffect(() => {
+    if (!onMobileScanPanelChange) return;
+    if (!isMobileLayout) {
+      onMobileScanPanelChange(null);
+      return;
+    }
+    onMobileScanPanelChange(mobileScanPanel);
+    return () => onMobileScanPanelChange(null);
+  }, [
+    activeSummary,
+    autopilotSceneMode,
+    effectiveMapZoom,
+    isMobileLayout,
+    liveScanStep,
+    onMobileScanPanelChange,
+    scanCounts.scanned,
+    scanCounts.total,
+    scanPreparing,
+    scanQueued,
+    scanRunning,
+    sceneImagesReady,
+    sceneReviewState.scan_radius,
+    sceneTilesReady,
+    selectedScene?.scene_id,
+    showGrid,
+  ]);
 
   useEffect(() => {
     overlayRecomputeRef.current += 1;
@@ -440,7 +506,7 @@ export function SceneMap({
       scene: selectedScene,
       tileSizeM: derivedTileSizeM,
       scanRadiusTiles: sceneReviewState.scan_radius,
-      threshold: 0.32,
+      threshold: REMOTE_SCAN_THRESHOLD,
       promptsText: labeler.defaultPromptText,
       tiles: orderedScanTiles,
     });
@@ -465,6 +531,11 @@ export function SceneMap({
           ...current,
           ...imported.results,
         }));
+        onReviewStateChange({
+          ...sceneReviewState,
+          scanned_tile_ids: imported.tiles.map((tile) => tile.tile_id),
+        });
+        setRuntimeScanCount(imported.summary.total);
         onError(null);
       } catch (reason) {
         onError(String(reason));
@@ -526,43 +597,10 @@ export function SceneMap({
   });
 
   return (
-    <section className="panel map-panel">
-      <MapScanControls
-        activeSummary={activeSummary}
-        basemap={basemap}
-        crosswalkCount={scanCounts.crosswalk}
-        liveScanStep={liveScanStep}
-        mapZoom={effectiveMapZoom}
-        noCrosswalkCount={scanCounts.noCrosswalk}
-        onBasemapChange={onBasemapChange}
-        onPauseScan={() => {
-          scanAbortRef.current = true;
-          setScanRunning(false);
-          setScanPreparing(false);
-          setInteractionPhase("idle");
-        }}
-        scanPreparing={scanPreparing}
-        sceneTilesReady={sceneTilesReady}
-        sceneImagesReady={sceneImagesReady}
-        onResetScan={handleResetScan}
-        onScanDelayChange={setScanDelay}
-        onScanRadiusChange={setScanRadius}
-        onStartScan={handleStartScan}
-        onExportBatchJob={handleExportBatchJob}
-        onImportBatchResult={handleImportBatchResult}
-        scanDelay={sceneReviewState.scan_delay_ms}
-        scanQueued={scanQueued}
-        scanRadius={sceneReviewState.scan_radius}
-        scanRunning={scanRunning}
-        scannedCount={scanCounts.scanned}
-        sceneLabel={selectedScene ? sceneLabel(selectedScene) : "World overview"}
-        showGrid={showGrid}
-        totalTilesInCircle={scanCounts.total}
-      />
-
-      <div className="map-shell map-shell-large" ref={mapShellRef}>
+    <section className="relative h-full w-full overflow-hidden" ref={mapShellRef}>
+      <div className="h-full w-full">
         <MapContainer
-          className="leaflet-map"
+          className="h-full w-full"
           center={mapCenter}
           zoom={mapZoom}
           scrollWheelZoom
@@ -578,151 +616,82 @@ export function SceneMap({
           wheelPxPerZoomLevel={150}
           wheelDebounceTime={24}
         >
-          <TileLayer
-            attribution={basemapConfig.attribution}
-            crossOrigin="anonymous"
-            key={basemap}
-            maxZoom={basemapConfig.maxZoom}
-            keepBuffer={6}
-            updateWhenIdle
-            updateWhenZooming={false}
-            url={basemapConfig.url}
-          />
-          <MapEventBridge
-            onMapReady={handleMapReady}
-            onZoomChange={onZoomChange}
+          <SceneMapLayers
+            activeTile={activeTile}
+            activeTileDashArray={activeTileDashArray}
+            basemap={basemap}
+            bvhOverlayCells={bvhOverlayCells}
+            cityFineGridCells={cityFineGridCells}
+            displaySuggestions={displaySuggestions}
+            droppedTileDashArray={droppedTileDashArray}
+            effectiveMapZoom={effectiveMapZoom}
+            focusSceneId={focusSceneId}
+            focusedSceneId={selectedSceneId}
+            footprintCenter={footprintCenter}
+            footprintRadiusM={footprintRadiusM}
+            footprintTiles={footprintTiles}
             onCameraUpdate={handleCameraUpdate}
             onInteractionPhase={handleInteractionPhase}
+            onMapReady={handleMapReady}
+            onSelectScene={onSelectScene}
+            onSelectTile={onSelectTile}
+            onZoomChange={onZoomChange}
+            scanCircleDashArray={scanCircleDashArray}
+            scannedTileIdSet={scannedTileIdSet}
+            scenes={scenes}
+            selectedBounds={selectedBounds}
+            selectedSceneId={selectedSceneId}
+            selectedTileId={selectedTileId}
+            showAutopilotDetailGrid={showAutopilotDetailGrid}
+            showGrid={showGrid}
+            visibleAutopilotPlan={visibleAutopilotPlan}
           />
-          <MapCamera bounds={selectedBounds} focusKey={focusSceneId ?? selectedSceneId} onFitPhase={handleInteractionPhase} />
-
-          {scenes.map((scene) => {
-            const latitude = Number(scene.latitude ?? 0);
-            const longitude = Number(scene.longitude ?? 0);
-            const isSelected = scene.scene_id === selectedSceneId;
-            return (
-              <CircleMarker
-                key={scene.scene_id}
-                center={[latitude, longitude]}
-                radius={isSelected ? 10 : 7}
-                pathOptions={{
-                  color: isSelected ? "#f5c05d" : "#29c37d",
-                  weight: isSelected ? 3 : 2,
-                  fillOpacity: isSelected ? 0.74 : 0.45,
-                }}
-                eventHandlers={{ click: () => onSelectScene(scene.scene_id) }}
-              />
-            );
-          })}
-
-          {showGrid && footprintCenter ? (
-            <>
-              <Circle
-                center={footprintCenter}
-                radius={footprintRadiusM * 1.02}
-                pathOptions={{
-                  color: "rgba(255, 246, 214, 0.9)",
-                  weight: 8,
-                  opacity: 0.34,
-                  fillColor: "rgba(245, 192, 93, 0.1)",
-                  fillOpacity: 0.1,
-                  className: "scan-circle-glow",
-                }}
-              />
-              <Circle
-                center={footprintCenter}
-                radius={footprintRadiusM}
-                pathOptions={{
-                  color: "rgba(245, 192, 93, 0.98)",
-                  weight: 3,
-                  fillColor: "rgba(245, 192, 93, 0.08)",
-                  fillOpacity: 0.08,
-                  dashArray: scanCircleDashArray,
-                  className: "scan-circle-ring validation-scan-circle",
-                }}
-              />
-              <CircleMarker
-                center={footprintCenter}
-                radius={7}
-                pathOptions={{
-                  color: "#fff2c2",
-                  weight: 2,
-                  fillColor: "#f5c05d",
-                  fillOpacity: 0.95,
-                  className: "scan-circle-center",
-                }}
-              />
-            </>
-          ) : null}
-
-          {showGrid
-            ? footprintTiles.map((tile) => {
-                const bounds = bboxToLatLngBounds(tile.bbox_mercator);
-                if (!bounds) return null;
-                const isScanned = scannedTileIdSet.has(tile.tile_id);
-                const tone = tileTone(tile);
-                const isSelectedTile = tile.tile_id === selectedTileId;
-                const isActive = tile.tile_id === activeTile?.tile_id;
-                const browserSuggestion = displaySuggestions[tile.tile_id];
-                const displayTone =
-                  browserSuggestion?.label === "crosswalk"
-                    ? "crosswalk"
-                    : browserSuggestion?.label === "no_crosswalk"
-                      ? "no_crosswalk"
-                      : tone;
-                const color =
-                  displayTone === "crosswalk" ? "#29c37d" : displayTone === "no_crosswalk" ? "#ff6b6b" : "rgba(141, 161, 184, 0.8)";
-
-                return (
-                  <Rectangle
-                    key={tile.tile_id}
-                    bounds={bounds}
-                    pathOptions={{
-                      className: `validation-tile validation-tile-${validationClassSuffix(tile.tile_id)}${isSelectedTile ? " validation-selected-tile" : ""}${isActive ? " validation-active-tile" : ""}`,
-                      color: isSelectedTile ? "#f5c05d" : isActive ? "#f5c05d" : color,
-                      weight: isSelectedTile || isActive ? 4 : browserSuggestion ? 3 : isScanned ? 3 : 2,
-                      fillColor: color,
-                      fillOpacity: browserSuggestion ? 0.28 : isScanned ? 0.44 : 0.18,
-                      dashArray: browserSuggestion ? activeTileDashArray : tone === "dropped" ? droppedTileDashArray : undefined,
-                      opacity: isScanned ? 1 : 0.92,
-                    }}
-                    eventHandlers={{ click: () => onSelectTile(tile) }}
-                  />
-                );
-              })
-            : null}
-
-          {showGrid && activeTileBounds ? (
-            <Rectangle
-              bounds={activeTileBounds}
-              pathOptions={{
-                color: "#fff2c2",
-                weight: 5,
-                opacity: 1,
-                fillColor: "#f5c05d",
-                fillOpacity: 0.18,
-                dashArray: activeTileDashArray,
-                className: "scan-active-rect",
-              }}
-            />
-          ) : null}
-
-          {showGrid && activeTileCenter ? (
-            <CircleMarker
-              center={activeTileCenter}
-              radius={8}
-              pathOptions={{
-                color: "#fff8dd",
-                weight: 2,
-                fillColor: "#f5c05d",
-                fillOpacity: 1,
-                className: "scan-active-dot",
-              }}
-            />
-          ) : null}
         </MapContainer>
       </div>
-      {mapDebug ? <MapValidationPanel snapshot={validationSnapshot} /> : null}
+      {!isMobileLayout ? (
+        <div className="pointer-events-none absolute bottom-4 left-4 z-[1000]">
+          <MapScanControls
+            activeSummary={activeSummary}
+            autopilotMode={autopilotSceneMode}
+            crosswalkCount={scanCounts.crosswalk}
+            liveScanStep={liveScanStep}
+            mapZoom={effectiveMapZoom}
+            noCrosswalkCount={scanCounts.noCrosswalk}
+            onPauseScan={() => {
+              scanAbortRef.current = true;
+              setScanRunning(false);
+              setScanPreparing(false);
+              setInteractionPhase("idle");
+            }}
+            scanPreparing={scanPreparing}
+            sceneTilesReady={sceneTilesReady}
+            sceneImagesReady={sceneImagesReady}
+            onScanDelayChange={setScanDelay}
+            onScanRadiusChange={setScanRadius}
+            onStartScan={handleStartScan}
+            onExportBatchJob={handleExportBatchJob}
+            onImportBatchResult={handleImportBatchResult}
+            scanDelay={sceneReviewState.scan_delay_ms}
+            scanQueued={scanQueued}
+            scanRadius={sceneReviewState.scan_radius}
+            scanRunning={scanRunning}
+            scannedCount={scanCounts.scanned}
+            sceneLabel={selectedScene ? sceneLabel(selectedScene) : "World overview"}
+            showGrid={showGrid}
+            totalTilesInCircle={scanCounts.total}
+          />
+        </div>
+      ) : null}
+      {!isMobileLayout ? (
+        <div className="pointer-events-none absolute bottom-4 left-1/2 z-[1000] -translate-x-1/2">
+          <SceneBasemapSwitch basemap={basemap} onBasemapChange={onBasemapChange} />
+        </div>
+      ) : null}
+      {mapDebug ? (
+        <div className="pointer-events-none absolute left-4 top-4 z-[1000]">
+          <MapValidationPanel snapshot={validationSnapshot} />
+        </div>
+      ) : null}
     </section>
   );
 }

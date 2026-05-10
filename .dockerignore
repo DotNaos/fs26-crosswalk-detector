@@ -1,0 +1,12 @@
+.git
+.local
+.venv
+__pycache__
+*.pyc
+data
+dogfood-output
+models
+notebooks
+validation-output
+web/dist
+web/node_modules

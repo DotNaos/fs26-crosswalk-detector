@@ -1,6 +1,14 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { cancelSceneScan, fetchScanHealth, fetchSceneScan, startSceneScan, type ScanHealth, type ScanSceneRequest, warmupScanBackend } from "../scan-api";
-import type { BrowserLabelSuggestion, DatasetTile, RealDatasetConfig } from "../types";
+import { buildScanBatchJob } from "../scan-batch";
+import {
+  cancelRemoteScanJob,
+  connectRemoteController,
+  getRemoteScanJob,
+  getRemoteScanResult,
+  loadRemoteControllerSnapshot,
+  startRemoteScanJob,
+} from "../remote-api";
+import type { BrowserLabelSuggestion, DatasetTile, RealDatasetConfig, RemoteControllerSnapshot } from "../types";
 
 type LabelerStatus = "idle" | "connecting" | "ready" | "running" | "error";
 
@@ -16,7 +24,8 @@ type RunSceneLabelingOptions = {
 };
 
 type RemoteCrosswalkLabelerArgs = {
-  backendUrl: string;
+  runName: string;
+  exportName: string;
   scenes: RealDatasetConfig["scenes"];
   tileSizeM: number;
 };
@@ -27,7 +36,7 @@ export type RemoteCrosswalkLabelerHandle = {
   error: string | null;
   progress: ProgressState;
   lastBatchCount: number;
-  health: ScanHealth | null;
+  controller: RemoteControllerSnapshot | null;
   ensureReady: () => Promise<void>;
   runSceneLabeling: (
     tiles: DatasetTile[],
@@ -39,50 +48,33 @@ export type RemoteCrosswalkLabelerHandle = {
 
 const DEFAULT_PROMPT_TEXT = "server-side hybrid scan";
 
-export function useRemoteCrosswalkLabeler({ backendUrl, scenes, tileSizeM }: RemoteCrosswalkLabelerArgs) {
+export function useRemoteCrosswalkLabeler({ runName, exportName, scenes, tileSizeM }: RemoteCrosswalkLabelerArgs) {
   const [status, setStatus] = useState<LabelerStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<ProgressState>({ done: 0, total: 0 });
   const [lastBatchCount, setLastBatchCount] = useState(0);
-  const [health, setHealth] = useState<ScanHealth | null>(null);
+  const [controller, setController] = useState<RemoteControllerSnapshot | null>(null);
   const activeJobIdRef = useRef<string | null>(null);
 
   const ensureReady = useCallback(async () => {
     setStatus("connecting");
     setError(null);
     try {
-      let nextHealth = await fetchScanHealth(backendUrl);
-      if (!nextHealth.ready) {
-        nextHealth = await warmupScanBackend(backendUrl);
+      let snapshot = await loadRemoteControllerSnapshot();
+      if (!snapshot.connected) {
+        snapshot = await connectRemoteController();
       }
-      setHealth(nextHealth);
-      if (nextHealth.ready) {
-        setStatus("ready");
-        return;
-      }
-
-      const timeoutAt = window.performance.now() + 180_000;
-      for (;;) {
-        await new Promise((resolve) => window.setTimeout(resolve, 1_000));
-        nextHealth = await fetchScanHealth(backendUrl);
-        setHealth(nextHealth);
-        if (nextHealth.ready) {
-          setStatus("ready");
-          return;
-        }
-        if (window.performance.now() > timeoutAt) {
-          throw new Error("Scan backend did not finish loading its models in time.");
-        }
-      }
+      setController(snapshot);
+      setStatus("ready");
     } catch (reason) {
       setStatus("error");
       setError(String(reason));
       throw reason;
     }
-  }, [backendUrl]);
+  }, []);
 
   const runSceneLabeling = useCallback(
-    async (tiles: DatasetTile[], _promptsText: string, threshold: number, options?: RunSceneLabelingOptions) => {
+    async (tiles: DatasetTile[], promptsText: string, threshold: number, options?: RunSceneLabelingOptions) => {
       if (!tiles.length) return {};
       const sceneId = tiles[0]?.scene_id;
       const scene = scenes.find((entry) => entry.scene_id === sceneId);
@@ -96,68 +88,69 @@ export function useRemoteCrosswalkLabeler({ backendUrl, scenes, tileSizeM }: Rem
       setLastBatchCount(0);
       setProgress({ done: 0, total: tiles.length });
 
-      const startScene: ScanSceneRequest = {
-        scene_id: scene.scene_id,
-        latitude: scene.latitude,
-        longitude: scene.longitude,
-        size_m: scene.size_m,
-        image_px: scene.image_px,
-        tile_size_m: tileSizeM,
-      };
-      const { job_id } = await startSceneScan(backendUrl, startScene, tiles, threshold);
-      activeJobIdRef.current = job_id;
+      const scanRadiusTiles = Math.max(1, Math.round(Math.sqrt(tiles.length / Math.PI)));
+      const job = buildScanBatchJob({
+        summary: {
+          run_name: runName,
+          export_name: exportName,
+        } as never,
+        scene: scene as never,
+        tileSizeM,
+        scanRadiusTiles,
+        threshold,
+        promptsText,
+        tiles,
+      });
 
-      const seenTileIds = new Set<string>();
-      let lastDone = 0;
+      const record = await startRemoteScanJob(job);
+      activeJobIdRef.current = record.id;
+
       for (;;) {
-        if (options?.shouldAbort?.()) {
-          if (activeJobIdRef.current) {
-            await cancelSceneScan(backendUrl, activeJobIdRef.current).catch(() => undefined);
-          }
-          break;
+        if (options?.shouldAbort?.() && activeJobIdRef.current) {
+          await cancelRemoteScanJob(activeJobIdRef.current).catch(() => undefined);
+          activeJobIdRef.current = null;
+          setStatus("ready");
+          setProgress({ done: 0, total: tiles.length });
+          return {};
         }
 
-        const job = await fetchSceneScan(backendUrl, job_id);
+        const next = await getRemoteScanJob(record.id);
         setProgress({
-          done: job.done,
-          total: job.total,
-          currentTileId: job.current_tile_id ?? undefined,
+          done: next.status === "completed" && next.summary ? next.summary.total : 0,
+          total: tiles.length,
+          currentTileId: next.slurm_job_id ?? next.remote_state ?? undefined,
         });
-        const sortedSuggestions = Object.values(job.results);
-        for (const suggestion of sortedSuggestions) {
-          if (seenTileIds.has(suggestion.tile_id)) continue;
-          seenTileIds.add(suggestion.tile_id);
-          options?.onSuggestion?.(suggestion, seenTileIds.size - 1, job.total);
-        }
-        if (job.done > lastDone) {
-          lastDone = job.done;
-          setLastBatchCount(lastDone);
-        }
 
-        if (job.status === "completed") {
+        if (next.status === "completed") {
+          const result = await getRemoteScanResult(record.id);
+          const orderedSuggestions = result.tiles;
+          orderedSuggestions.forEach((suggestion, index) => {
+            options?.onSuggestion?.(suggestion, index, orderedSuggestions.length);
+          });
+          setLastBatchCount(result.summary.total);
+          setProgress({ done: result.summary.total, total: result.summary.total });
           setStatus("ready");
           activeJobIdRef.current = null;
-          return job.results;
+          return result.results;
         }
-        if (job.status === "failed") {
+
+        if (next.status === "failed") {
           setStatus("error");
+          setError(next.error ?? "Remote scan failed.");
           activeJobIdRef.current = null;
-          setError(job.error ?? "Remote scan failed.");
-          throw new Error(job.error ?? "Remote scan failed.");
+          throw new Error(next.error ?? "Remote scan failed.");
         }
-        if (job.status === "cancelled") {
+
+        if (next.status === "cancelled") {
           setStatus("ready");
           activeJobIdRef.current = null;
-          return job.results;
+          return {};
         }
-        await new Promise((resolve) => window.setTimeout(resolve, 450));
-      }
 
-      setStatus("ready");
-      activeJobIdRef.current = null;
-      return {};
+        await new Promise((resolve) => window.setTimeout(resolve, 1_250));
+      }
     },
-    [backendUrl, ensureReady, scenes, tileSizeM],
+    [ensureReady, exportName, runName, scenes, tileSizeM],
   );
 
   return useMemo(
@@ -167,10 +160,10 @@ export function useRemoteCrosswalkLabeler({ backendUrl, scenes, tileSizeM }: Rem
       error,
       progress,
       lastBatchCount,
-      health,
+      controller,
       ensureReady,
       runSceneLabeling,
     }),
-    [ensureReady, error, health, lastBatchCount, progress, runSceneLabeling, status],
+    [controller, ensureReady, error, lastBatchCount, progress, runSceneLabeling, status],
   );
 }

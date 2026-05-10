@@ -1,3 +1,5 @@
+import { Alert, Button, Card, Skeleton } from "@heroui/react";
+import { Check, CheckCheck, CircleOff, MinusCircle, SkipForward, Tags } from "lucide-react";
 import type { BrowserLabelSuggestion, DatasetScene, DatasetTile } from "../types";
 import { formatProbability, sceneLabel } from "../utils";
 
@@ -5,12 +7,13 @@ type InspectorProps = {
   scene?: DatasetScene;
   tile?: DatasetTile;
   browserSuggestion?: BrowserLabelSuggestion;
-  draftLabel: string;
-  draftSelected: boolean;
-  onDraftLabel: (label: string) => void;
-  onDraftSelected: (selected: boolean) => void;
+  suggestionCount: number;
+  embedded?: boolean;
+  compact?: boolean;
   onCommit: (label: string, selected: boolean) => void;
-  onReset: () => void;
+  onApplySuggestion?: () => void;
+  onJumpToNextSuggestion: () => void;
+  onJumpToNextPositive: () => void;
   saving: boolean;
 };
 
@@ -18,106 +21,184 @@ export function Inspector({
   scene,
   tile,
   browserSuggestion,
-  draftLabel,
-  draftSelected,
-  onDraftLabel,
-  onDraftSelected,
+  suggestionCount,
+  embedded = false,
+  compact = false,
   onCommit,
-  onReset,
+  onApplySuggestion,
+  onJumpToNextSuggestion,
+  onJumpToNextPositive,
   saving,
 }: InspectorProps) {
-  if (!tile) {
+  if (compact) {
     return (
-      <aside className="inspector panel">
-        <p className="eyebrow">Inspector</p>
-        <h2>Awaiting selection</h2>
-        <p className="empty-copy">Select a tile on the map to inspect and correct its label.</p>
-      </aside>
+      <div className="flex w-full min-w-0 flex-col gap-3">
+        <div className="grid min-w-0 grid-cols-[5rem,1fr] gap-3">
+          {tile?.image_path ? (
+            <img
+              alt={tile.relative_path}
+              className="aspect-square w-20 rounded-[18px] object-cover [corner-shape:squircle]"
+              decoding="async"
+              loading="lazy"
+              src={tile.image_path}
+            />
+          ) : (
+            <Skeleton className="aspect-square w-20 rounded-[18px] [corner-shape:squircle]" />
+          )}
+          <div className="flex min-w-0 flex-col justify-center gap-1">
+            <div className="truncate text-base font-semibold">{tile ? tile.relative_path : "No tile selected"}</div>
+            <div className="truncate text-xs text-white/65">{tile ? (scene ? sceneLabel(scene) : tile.scene_id) : "Tap a tile on the map"}</div>
+            <div className="flex min-w-0 flex-wrap gap-1.5 pt-1 text-[11px] font-semibold">
+              {tile ? <span className="rounded-full bg-white/10 px-2 py-1">{tile.selected ? tile.label : "unreviewed"}</span> : null}
+              {browserSuggestion ? (
+                <span className="rounded-full bg-primary/25 px-2 py-1 text-primary-foreground">
+                  machine {browserSuggestion.label} · {formatProbability(browserSuggestion.score)}
+                </span>
+              ) : null}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <Button
+            aria-label="Mark as crosswalk"
+            className="h-10 rounded-[16px] [corner-shape:squircle]"
+            isDisabled={!tile || saving}
+            onPress={() => tile && onCommit("crosswalk", true)}
+            size="sm"
+            variant="primary"
+          >
+            <Check className="size-4" />
+            Crosswalk
+          </Button>
+          <Button
+            aria-label="Mark as no crosswalk"
+            className="h-10 rounded-[16px] [corner-shape:squircle]"
+            isDisabled={!tile || saving}
+            onPress={() => tile && onCommit("no_crosswalk", true)}
+            size="sm"
+            variant="danger"
+          >
+            <CircleOff className="size-4" />
+            No
+          </Button>
+          <Button
+            aria-label="Drop label"
+            className="h-10 rounded-[16px] [corner-shape:squircle]"
+            isDisabled={!tile || saving}
+            onPress={() => tile && onCommit(tile.label, false)}
+            size="sm"
+            variant="secondary"
+          >
+            <MinusCircle className="size-4" />
+            Drop
+          </Button>
+          <Button
+            aria-label="Next server result"
+            className="h-10 rounded-[16px] [corner-shape:squircle]"
+            isDisabled={!suggestionCount}
+            onPress={onJumpToNextSuggestion}
+            size="sm"
+            variant={browserSuggestion ? "primary" : "secondary"}
+          >
+            <SkipForward className="size-4" />
+            Next
+          </Button>
+        </div>
+        {browserSuggestion && onApplySuggestion ? (
+          <Button className="h-10 rounded-[16px] [corner-shape:squircle]" onPress={onApplySuggestion} size="sm" variant="secondary">
+            <CheckCheck className="size-4" />
+            Accept machine label
+          </Button>
+        ) : null}
+      </div>
     );
   }
 
-  return (
-    <aside className="inspector panel">
-      <div className="inspector-header">
-        <div>
-          <p className="inspector-kicker">{scene ? sceneLabel(scene) : tile.scene_id}</p>
-          <h2>{tile.relative_path}</h2>
-        </div>
-        <button className="ghost" onClick={onReset} type="button">
-          Reset
-        </button>
+  const content = (
+    <>
+      <div className="flex min-w-0 flex-col gap-1">
+        <h3 className="truncate text-lg font-semibold text-foreground">{tile ? tile.relative_path : "Awaiting selection"}</h3>
+        <p className="text-sm text-foreground/70">
+          {tile ? (scene ? sceneLabel(scene) : tile.scene_id) : "Select a tile on the map to review it."}
+        </p>
       </div>
 
-      <div className="inspector-preview">
-        {tile.image_path ? (
-          <img src={tile.image_path} alt={tile.relative_path} loading="lazy" decoding="async" />
+      {tile ? (
+        tile.image_path ? (
+          <img
+            alt={tile.relative_path}
+            className="aspect-square w-full rounded-xl object-cover"
+            decoding="async"
+            loading="lazy"
+            src={tile.image_path}
+          />
         ) : (
-          <div className="inspector-preview-empty">
-            <p className="eyebrow">Tile image pending</p>
-            <p>The scene tiles are still loading for this selection.</p>
-          </div>
-        )}
-      </div>
+          <Skeleton className="aspect-square w-full rounded-xl" />
+        )
+      ) : (
+        <Skeleton className="aspect-square w-full rounded-xl" />
+      )}
 
-      <div className="pill-row tight">
-        <span className="pill">Label {tile.label}</span>
-        <span className="pill">Predicted {tile.predicted_label}</span>
-        <span className="pill muted">{tile.selected ? "Selected" : "Dropped"}</span>
-        {browserSuggestion ? <span className="pill amber">Browser {browserSuggestion.label}</span> : null}
-      </div>
+      {tile && browserSuggestion ? (
+        <Alert status="accent">
+          <Alert.Content>
+            <Alert.Title className="flex items-center gap-2">
+              <Tags className="size-4" />
+              <span>Server guess</span>
+            </Alert.Title>
+            <Alert.Description>{browserSuggestion.label}</Alert.Description>
+          </Alert.Content>
+        </Alert>
+      ) : null}
 
-      <dl className="inspector-meta">
-        <div>
-          <dt>Tile</dt>
-          <dd>{tile.tile_id}</dd>
+      {tile && (browserSuggestion || suggestionCount > 0) ? (
+        <div className="flex flex-wrap gap-2">
+          {browserSuggestion && onApplySuggestion ? (
+            <Button onPress={onApplySuggestion} size="sm" variant="secondary">
+              <CheckCheck className="size-4" />
+              Accept result
+            </Button>
+          ) : null}
+          <Button onPress={onJumpToNextPositive} size="sm" variant="ghost">
+            <SkipForward className="size-4" />
+            Next positive
+          </Button>
+          <Button onPress={onJumpToNextSuggestion} size="sm" variant="ghost">
+            <SkipForward className="size-4" />
+            Next
+          </Button>
         </div>
-        <div>
-          <dt>Status</dt>
-          <dd>{tile.status}</dd>
-        </div>
-        <div>
-          <dt>Review source</dt>
-          <dd>{tile.review_source}</dd>
-        </div>
-        <div>
-          <dt>Combined probability</dt>
-          <dd>{formatProbability(tile.combined_probability)}</dd>
-        </div>
-        <div>
-          <dt>Browser score</dt>
-          <dd>{browserSuggestion ? formatProbability(browserSuggestion.score) : "n/a"}</dd>
-        </div>
-      </dl>
+      ) : null}
 
-      <div className="review-form">
-        <label>
-          Label
-          <select value={draftLabel} onChange={(event) => onDraftLabel(event.target.value)}>
-            <option value="unknown">unknown</option>
-            <option value="crosswalk">crosswalk</option>
-            <option value="no_crosswalk">no_crosswalk</option>
-          </select>
-        </label>
-        <label className="checkbox-row">
-          <input checked={draftSelected} onChange={(event) => onDraftSelected(event.target.checked)} type="checkbox" />
-          Included in export
-        </label>
-      </div>
+      {tile ? (
+        <div className="flex flex-wrap gap-2">
+          <Button isDisabled={saving} onPress={() => onCommit("crosswalk", true)} variant="primary">
+            <Check className="size-4" />
+            Crosswalk
+          </Button>
+          <Button isDisabled={saving} onPress={() => onCommit("no_crosswalk", true)} variant="danger">
+            <CircleOff className="size-4" />
+            No crosswalk
+          </Button>
+          <Button isDisabled={saving} onPress={() => onCommit(tile.label, false)} variant="tertiary">
+            <MinusCircle className="size-4" />
+            Drop
+          </Button>
+        </div>
+      ) : null}
+    </>
+  );
 
-      <div className="inspector-actions">
-        <button className="primary positive" disabled={saving} onClick={() => onCommit("crosswalk", true)} type="button">
-          Mark Crosswalk
-        </button>
-        <button className="primary negative" disabled={saving} onClick={() => onCommit("no_crosswalk", true)} type="button">
-          Mark No Crosswalk
-        </button>
-        <button className="ghost" disabled={saving} onClick={() => onCommit(draftLabel, false)} type="button">
-          Drop
-        </button>
-        <button className="primary" disabled={saving} onClick={() => onCommit(draftLabel, draftSelected)} type="button">
-          Save Changes
-        </button>
-      </div>
-    </aside>
+  if (embedded) {
+    return <div className="flex flex-col gap-4">{content}</div>;
+  }
+
+  return (
+    <Card className="pointer-events-auto max-h-[calc(100dvh-2rem)] overflow-hidden shadow-xl" variant="secondary">
+      <Card.Content className="flex max-h-full min-h-0 flex-col gap-4 overflow-y-auto" data-scroll-guard="inspector-card">
+        {content}
+      </Card.Content>
+    </Card>
   );
 }

@@ -17,13 +17,15 @@ from urllib.parse import urlparse
 from .scan_backend import (
     CLIP_MODEL_ID,
     DETECTOR_MODEL_ID,
-    HybridCrosswalkScanner,
+    ScanBackend,
     SceneRequest,
+    SAM31_MODEL_VERSION,
     TileRequest,
     _sigmoid,
     _tile_pixel_bounds,
     crop_tile,
     crosswalk_score_image,
+    create_scan_backend,
     decide_tile_label,
     detector_overlap_score,
     fetch_scene_image,
@@ -86,18 +88,18 @@ class ScanJob:
 
 class ScanService:
     def __init__(self) -> None:
-        self._scanner: HybridCrosswalkScanner | None = None
+        self._scanner: ScanBackend | None = None
         self._scanner_lock = Lock()
         self._jobs: dict[str, ScanJob] = {}
         self._jobs_lock = Lock()
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._warmup_executor = ThreadPoolExecutor(max_workers=1)
-        self._warmup_future: Future[HybridCrosswalkScanner] | None = None
+        self._warmup_future: Future[ScanBackend] | None = None
 
-    def scanner(self) -> HybridCrosswalkScanner:
+    def scanner(self) -> ScanBackend:
         with self._scanner_lock:
             if self._scanner is None:
-                self._scanner = HybridCrosswalkScanner()
+                self._scanner = create_scan_backend()
             return self._scanner
 
     def ready(self) -> bool:
@@ -114,11 +116,15 @@ class ScanService:
 
     def health(self) -> dict[str, Any]:
         scanner = self._scanner
+        model = f"{os.path.basename(DETECTOR_MODEL_ID)} + {os.path.basename(CLIP_MODEL_ID)}"
+        if scanner and scanner.backend_name == "sam31":
+            model = SAM31_MODEL_VERSION
         return {
             "ok": True,
             "ready": scanner is not None,
             "warming": bool(self._warmup_future and not self._warmup_future.done()),
-            "model": f"{os.path.basename(DETECTOR_MODEL_ID)} + {os.path.basename(CLIP_MODEL_ID)}",
+            "model": model,
+            "backend": scanner.backend_name if scanner else os.getenv("CROSSWALK_SCAN_BACKEND", "sam31"),
             "device": scanner.device if scanner else "not-loaded",
             "busy": any(job.status in {"queued", "running"} for job in self._jobs.values()),
         }
@@ -185,37 +191,77 @@ class ScanService:
                 return
 
             job.update(stage="detecting-crosswalks")
-            detections = scanner.detect_boxes(scene_image)
+            if scanner.backend_name == "sam31":
+                detections = scanner.detect_scene(scene_image)
+                sam31_scores = scanner.score_tiles(scene, tiles, detections)
+                effective_threshold = scanner.tile_threshold
+            else:
+                effective_threshold = scanner.supervised_threshold if scanner.has_supervised_classifier else threshold
+                detections = [] if scanner.has_supervised_classifier else scanner.detect_boxes(scene_image)
+                sam31_scores = []
             if job.cancel_event.is_set():
                 job.update(status="cancelled", stage="cancelled")
                 return
 
             job.update(stage="scoring-tiles")
-            context_images = [crop_tile(scene_image, scene, tile, padding_tiles=1.0) for tile in tiles]
-            center_images = [crop_tile(scene_image, scene, tile) for tile in tiles]
-            clip_scores = scanner.score_context_images(context_images)
+            context_images = [] if scanner.backend_name == "sam31" else [crop_tile(scene_image, scene, tile, padding_tiles=1.0) for tile in tiles]
+            center_images = [] if scanner.backend_name == "sam31" else [crop_tile(scene_image, scene, tile) for tile in tiles]
+            supervised_scores = (
+                scanner.score_supervised_context_images(context_images)
+                if scanner.backend_name != "sam31" and scanner.has_supervised_classifier
+                else []
+            )
+            clip_scores = [] if scanner.backend_name == "sam31" or supervised_scores else scanner.score_context_images(context_images)
 
             for index, tile in enumerate(tiles, start=1):
                 if job.cancel_event.is_set():
                     job.update(status="cancelled", stage="cancelled")
                     return
-                tile_bounds = _tile_pixel_bounds(scene, tile.bbox_mercator)
-                detector_score = detector_overlap_score(detections, tile_bounds)
-                heuristic_probability = _sigmoid(crosswalk_score_image(center_images[index - 1]) / 8.0)
-                clip_positive, clip_negative = clip_scores[index - 1]
-                metrics = decide_tile_label(clip_positive, clip_negative, heuristic_probability, detector_score, threshold)
-                job.add_suggestion(
-                    tile.tile_id,
-                    {
+                if scanner.backend_name == "sam31":
+                    sam_metrics = sam31_scores[index - 1]
+                    suggestion = {
+                        "tile_id": tile.tile_id,
+                        "label": sam_metrics.label,
+                        "score": round(sam_metrics.score, 6),
+                        "peak": round(sam_metrics.peak, 6),
+                        "coverage": round(sam_metrics.coverage, 6),
+                        "box_overlap": round(sam_metrics.box_overlap, 6),
+                        "sam_detection_count": sam_metrics.detection_count,
+                        "prompt": sam_metrics.prompt,
+                        "selected": True,
+                        "review_source": "python-sam31-scan",
+                    }
+                else:
+                    tile_bounds = _tile_pixel_bounds(scene, tile.bbox_mercator)
+                    detector_score = detector_overlap_score(detections, tile_bounds)
+                    heuristic_probability = _sigmoid(crosswalk_score_image(center_images[index - 1]) / 8.0)
+                    supervised_probability = supervised_scores[index - 1] if supervised_scores else None
+                    if supervised_probability is not None:
+                        clip_positive, clip_negative = supervised_probability, 1.0 - supervised_probability
+                    else:
+                        clip_positive, clip_negative = clip_scores[index - 1]
+                    metrics = decide_tile_label(
+                        clip_positive,
+                        clip_negative,
+                        heuristic_probability,
+                        detector_score,
+                        effective_threshold,
+                        supervised_probability=supervised_probability,
+                    )
+                    suggestion = {
                         "tile_id": tile.tile_id,
                         "label": metrics.label,
                         "score": round(metrics.combined_score, 6),
                         "peak": round(max(metrics.clip_positive, metrics.detector_score), 6),
                         "coverage": round(metrics.heuristic_probability, 6),
-                        "prompt": "server-hybrid",
+                        "supervised_probability": round(metrics.supervised_probability, 6) if metrics.supervised_probability is not None else None,
+                        "prompt": "server-clip-linear" if supervised_probability is not None else "server-hybrid",
                         "selected": True,
-                        "review_source": "python-hybrid-scan",
-                    },
+                        "review_source": "python-clip-linear-scan" if supervised_probability is not None else "python-hybrid-scan",
+                    }
+                job.add_suggestion(
+                    tile.tile_id,
+                    suggestion,
                     index,
                 )
 

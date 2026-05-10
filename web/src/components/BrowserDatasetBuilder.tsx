@@ -1,5 +1,6 @@
 import type { Dispatch, SetStateAction } from "react";
 import { useMemo, useState } from "react";
+import { Alert, Button, Card, Chip, Input, Label, Spinner, TextField } from "@heroui/react";
 import { updateTiles } from "../api";
 import type { BrowserCrosswalkLabelerHandle } from "../hooks/useBrowserCrosswalkLabeler";
 import type { BrowserLabelSuggestion, DatasetScene, DatasetTile, ScenePayload } from "../types";
@@ -91,110 +92,137 @@ export function BrowserDatasetBuilder({
     }
   }
 
+  const statusColor =
+    labeler.status === "error" ? "danger" : labeler.status === "running" ? "warning" : "success";
+
   return (
-    <section className="panel builder-panel">
-      <div className="builder-header">
-        <div>
-          <p className="eyebrow">Server dataset builder</p>
-          <h2>{scene ? sceneLabel(scene) : "Select a scene"}</h2>
+    <Card variant="secondary" className="pointer-events-auto shadow-xl">
+      <Card.Header>
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <Card.Title>{scene ? sceneLabel(scene) : "Select a scene"}</Card.Title>
+          <Card.Description>Browser dataset builder</Card.Description>
         </div>
-        <span className={`pill ${labeler.status === "error" ? "red" : labeler.status === "running" ? "amber" : "green"}`}>
-          {labeler.status}
-        </span>
-      </div>
+        <Chip color={statusColor} size="sm">{labeler.status}</Chip>
+      </Card.Header>
 
-      <div className="builder-grid">
-        <label className="config-span-2">
-          Backend URL
-          <input value={backendUrl} onChange={(event) => onBackendUrlChange(event.target.value)} placeholder="http://127.0.0.1:8000" />
-        </label>
-      </div>
-
-      <p className="builder-copy">
-        Runs the scan on a Python service on your laptop or in Colab, then writes the accepted labels back into the local dataset state.
-      </p>
-
-      <div className="builder-grid">
-        <label>
-          Prompt list
-          <input value={promptText} onChange={(event) => setPromptText(event.target.value)} placeholder="crosswalk, zebra crossing" />
-        </label>
-        <label>
-          Crosswalk threshold
-          <input
-            type="number"
-            min={0.2}
-            max={0.98}
-            step={0.01}
-            value={threshold}
-            onChange={(event) => setThreshold(Number(event.target.value) || threshold)}
+      <Card.Content className="flex flex-col gap-4">
+        <TextField variant="secondary">
+          <Label>Backend URL</Label>
+          <Input
+            value={backendUrl}
+            onChange={(e) => onBackendUrlChange(e.target.value)}
+            placeholder="http://127.0.0.1:8000"
           />
-        </label>
-      </div>
+        </TextField>
 
-      <div className="builder-actions">
-        <button className="ghost" disabled={labeler.status === "connecting" || labeler.status === "running"} onClick={() => void labeler.ensureReady()} type="button">
-          Check Backend
-        </button>
-        <button className="primary positive" disabled={!sceneTiles.length || labeler.status === "running"} onClick={() => void handleRunScene()} type="button">
-          Scan Loaded Scene
-        </button>
-        <button className="primary" disabled={sceneSuggestions.length === 0 || saving} onClick={() => void handleApplyScene()} type="button">
-          Apply Scene Labels
-        </button>
-        <button
-          className="ghost"
-          disabled={sceneSuggestions.length === 0}
-          onClick={() => {
-            const nextSuggestions = { ...suggestions };
-            for (const tile of sceneTiles) {
-              delete nextSuggestions[tile.tile_id];
-            }
-            onSuggestionsChange(nextSuggestions);
-          }}
-          type="button"
-        >
-          Clear Scene Suggestions
-        </button>
-      </div>
+        <p className="text-sm text-foreground-secondary">
+          Runs the scan on a Python service on your laptop or in Colab, then writes the accepted labels back into
+          the local dataset state.
+        </p>
 
-      <div className="pill-row tight">
-        <span className="pill muted">
-          {sceneTiles.length} loaded tile{sceneTiles.length === 1 ? "" : "s"}
-        </span>
-        <span className="pill green">Suggested crosswalk {suggestionStats.crosswalk}</span>
-        <span className="pill red">Suggested no_crosswalk {suggestionStats.noCrosswalk}</span>
-        {labeler.progress.total > 0 ? (
-          <span className="pill amber">
-            Running {labeler.progress.done}/{labeler.progress.total}
-          </span>
+        <div className="flex flex-col gap-3">
+          <TextField variant="secondary">
+            <Label>Prompt list</Label>
+            <Input
+              value={promptText}
+              onChange={(e) => setPromptText(e.target.value)}
+              placeholder="crosswalk, zebra crossing"
+            />
+          </TextField>
+          <TextField variant="secondary">
+            <Label>Crosswalk threshold</Label>
+            <Input
+              type="number"
+              min={0.2}
+              max={0.98}
+              step={0.01}
+              value={String(threshold)}
+              onChange={(e) => setThreshold(Number(e.target.value) || threshold)}
+            />
+          </TextField>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <Button
+            isDisabled={labeler.status === "connecting" || labeler.status === "running"}
+            onPress={() => void labeler.ensureReady()}
+            variant="ghost"
+            size="sm"
+          >
+            Check Backend
+          </Button>
+          <Button
+            isDisabled={!sceneTiles.length || labeler.status === "running"}
+            onPress={() => void handleRunScene()}
+            variant="primary"
+            size="sm"
+          >
+            {labeler.status === "running" ? <Spinner size="sm" /> : null}
+            Scan Loaded Scene
+          </Button>
+          <Button
+            isDisabled={sceneSuggestions.length === 0 || saving}
+            onPress={() => void handleApplyScene()}
+            variant="secondary"
+            size="sm"
+          >
+            {saving ? <Spinner size="sm" /> : null}
+            Apply Scene Labels
+          </Button>
+          <Button
+            isDisabled={sceneSuggestions.length === 0}
+            onPress={() => {
+              const nextSuggestions = { ...suggestions };
+              for (const tile of sceneTiles) {
+                delete nextSuggestions[tile.tile_id];
+              }
+              onSuggestionsChange(nextSuggestions);
+            }}
+            variant="ghost"
+            size="sm"
+          >
+            Clear Suggestions
+          </Button>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <Chip color="default" size="sm">{sceneTiles.length} tiles loaded</Chip>
+          <Chip color="success" size="sm">✓ {suggestionStats.crosswalk} crosswalk</Chip>
+          <Chip color="danger" size="sm">✕ {suggestionStats.noCrosswalk} no crosswalk</Chip>
+          {labeler.progress.total > 0 ? (
+            <Chip color="warning" size="sm">
+              Running {labeler.progress.done}/{labeler.progress.total}
+            </Chip>
+          ) : null}
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 text-sm">
+          {[
+            ["Latest batch", String(labeler.lastBatchCount)],
+            ["Current tile", labeler.progress.currentTileId ?? "n/a"],
+            [
+              "Top suggestion",
+              suggestionStats.strongest
+                ? `${suggestionStats.strongest.label} · ${formatProbability(suggestionStats.strongest.score)}`
+                : "n/a",
+            ],
+            ["Top prompt", suggestionStats.strongest?.prompt ?? "n/a"],
+          ].map(([label, value]) => (
+            <div key={label} className="rounded-lg border border-divider bg-content1 p-3">
+              <p className="text-xs uppercase tracking-wide text-foreground-muted">{label}</p>
+              <p className="mt-1 break-all text-foreground">{value}</p>
+            </div>
+          ))}
+        </div>
+
+        {labeler.error ? (
+          <Alert status="danger">
+            <Alert.Content>
+              <Alert.Description>{labeler.error}</Alert.Description>
+            </Alert.Content>
+          </Alert>
         ) : null}
-      </div>
-
-      <dl className="builder-meta">
-        <div>
-          <dt>Latest batch</dt>
-          <dd>{labeler.lastBatchCount}</dd>
-        </div>
-        <div>
-          <dt>Current tile</dt>
-          <dd>{labeler.progress.currentTileId ?? "n/a"}</dd>
-        </div>
-        <div>
-          <dt>Top suggestion</dt>
-          <dd>
-            {suggestionStats.strongest
-              ? `${suggestionStats.strongest.label} · ${formatProbability(suggestionStats.strongest.score)}`
-              : "n/a"}
-          </dd>
-        </div>
-        <div>
-          <dt>Top prompt</dt>
-          <dd>{suggestionStats.strongest?.prompt ?? "n/a"}</dd>
-        </div>
-      </dl>
-
-      {labeler.error ? <p className="builder-error">{labeler.error}</p> : null}
-    </section>
+      </Card.Content>
+    </Card>
   );
 }

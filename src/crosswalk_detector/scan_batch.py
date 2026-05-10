@@ -11,13 +11,15 @@ from typing import Any
 from .scan_backend import (
     CLIP_MODEL_ID,
     DETECTOR_MODEL_ID,
-    HybridCrosswalkScanner,
     SceneRequest,
+    SAM31_MODEL_VERSION,
+    SUPERVISED_CLIP_MODEL_PATH,
     TileRequest,
     _sigmoid,
     _tile_pixel_bounds,
     crop_tile,
     crosswalk_score_image,
+    create_scan_backend,
     decide_tile_label,
     detector_overlap_score,
     fetch_scene_image,
@@ -65,34 +67,74 @@ def run_scan_batch_job(job_payload: dict[str, Any], progress: bool = False) -> d
     scene = _parse_scene(job_payload)
     tiles = _parse_tiles(job_payload)
     threshold = float(job_payload.get("threshold", 0.32))
-    scanner = HybridCrosswalkScanner()
+    scanner = create_scan_backend()
 
     scene_image = fetch_scene_image(scene)
-    detections = scanner.detect_boxes(scene_image)
-    context_images = [crop_tile(scene_image, scene, tile, padding_tiles=1.0) for tile in tiles]
-    center_images = [crop_tile(scene_image, scene, tile) for tile in tiles]
-    clip_scores = scanner.score_context_images(context_images)
+    if scanner.backend_name == "sam31":
+        detections = scanner.detect_scene(scene_image)
+        sam31_scores = scanner.score_tiles(scene, tiles, detections)
+        effective_threshold = scanner.tile_threshold
+    else:
+        effective_threshold = scanner.supervised_threshold if scanner.has_supervised_classifier else threshold
+        detections = [] if scanner.has_supervised_classifier else scanner.detect_boxes(scene_image)
+        sam31_scores = []
 
     results: dict[str, dict[str, Any]] = {}
     result_tiles: list[dict[str, Any]] = []
     crosswalk_count = 0
     no_crosswalk_count = 0
+    context_images = [] if scanner.backend_name == "sam31" else [crop_tile(scene_image, scene, tile, padding_tiles=1.0) for tile in tiles]
+    supervised_scores = (
+        scanner.score_supervised_context_images(context_images)
+        if scanner.backend_name != "sam31" and scanner.has_supervised_classifier
+        else []
+    )
     for index, tile in enumerate(tiles, start=1):
-        tile_bounds = _tile_pixel_bounds(scene, tile.bbox_mercator)
-        detector_score = detector_overlap_score(detections, tile_bounds)
-        heuristic_probability = _sigmoid(crosswalk_score_image(center_images[index - 1]) / 8.0)
-        clip_positive, clip_negative = clip_scores[index - 1]
-        metrics = decide_tile_label(clip_positive, clip_negative, heuristic_probability, detector_score, threshold)
-        prediction = {
-            "tile_id": tile.tile_id,
-            "label": metrics.label,
-            "score": round(metrics.combined_score, 6),
-            "peak": round(max(metrics.clip_positive, metrics.detector_score), 6),
-            "coverage": round(metrics.heuristic_probability, 6),
-            "prompt": "server-hybrid",
-            "selected": True,
-            "review_source": "python-hybrid-scan",
-        }
+        if scanner.backend_name == "sam31":
+            sam_metrics = sam31_scores[index - 1]
+            prediction = {
+                "tile_id": tile.tile_id,
+                "label": sam_metrics.label,
+                "score": round(sam_metrics.score, 6),
+                "peak": round(sam_metrics.peak, 6),
+                "coverage": round(sam_metrics.coverage, 6),
+                "box_overlap": round(sam_metrics.box_overlap, 6),
+                "sam_detection_count": sam_metrics.detection_count,
+                "prompt": sam_metrics.prompt,
+                "selected": True,
+                "review_source": "python-sam31-scan",
+            }
+            label = sam_metrics.label
+        else:
+            tile_bounds = _tile_pixel_bounds(scene, tile.bbox_mercator)
+            detector_score = detector_overlap_score(detections, tile_bounds)
+            center_image = crop_tile(scene_image, scene, tile)
+            heuristic_probability = _sigmoid(crosswalk_score_image(center_image) / 8.0)
+            supervised_probability = supervised_scores[index - 1] if supervised_scores else None
+            if supervised_probability is not None:
+                clip_positive, clip_negative = supervised_probability, 1.0 - supervised_probability
+            else:
+                clip_positive, clip_negative = scanner.score_context_images([context_images[index - 1]])[0]
+            metrics = decide_tile_label(
+                clip_positive,
+                clip_negative,
+                heuristic_probability,
+                detector_score,
+                effective_threshold,
+                supervised_probability=supervised_probability,
+            )
+            prediction = {
+                "tile_id": tile.tile_id,
+                "label": metrics.label,
+                "score": round(metrics.combined_score, 6),
+                "peak": round(max(metrics.clip_positive, metrics.detector_score), 6),
+                "coverage": round(metrics.heuristic_probability, 6),
+                "supervised_probability": round(metrics.supervised_probability, 6) if metrics.supervised_probability is not None else None,
+                "prompt": "server-clip-linear" if supervised_probability is not None else "server-hybrid",
+                "selected": True,
+                "review_source": "python-clip-linear-scan" if supervised_probability is not None else "python-hybrid-scan",
+            }
+            label = metrics.label
         results[tile.tile_id] = prediction
         center_x = (tile.bbox_mercator[0] + tile.bbox_mercator[2]) / 2.0
         center_y = (tile.bbox_mercator[1] + tile.bbox_mercator[3]) / 2.0
@@ -115,12 +157,15 @@ def run_scan_batch_job(job_payload: dict[str, Any], progress: bool = False) -> d
                 **prediction,
             }
         )
-        if metrics.label == "crosswalk":
+        if label == "crosswalk":
             crosswalk_count += 1
         else:
             no_crosswalk_count += 1
         if progress:
-            print(f"[{index:>4}/{len(tiles)}] {tile.tile_id} -> {metrics.label} ({metrics.combined_score:.3f})")
+            print(
+                f"[{index:>4}/{len(tiles)}] {tile.tile_id} -> {label} ({prediction['score']:.3f})",
+                flush=True,
+            )
 
     return {
         "version": 1,
@@ -130,6 +175,14 @@ def run_scan_batch_job(job_payload: dict[str, Any], progress: bool = False) -> d
         "scanner": {
             "detector_model": DETECTOR_MODEL_ID,
             "clip_model": CLIP_MODEL_ID,
+            "backend": scanner.backend_name,
+            "sam_model": SAM31_MODEL_VERSION if scanner.backend_name == "sam31" else None,
+            "sam_prompts": list(scanner.prompts) if scanner.backend_name == "sam31" else None,
+            "sam_confidence_threshold": scanner.confidence_threshold if scanner.backend_name == "sam31" else None,
+            "sam_tile_threshold": scanner.tile_threshold if scanner.backend_name == "sam31" else None,
+            "supervised_model": "clip_linear" if scanner.backend_name != "sam31" and scanner.has_supervised_classifier else None,
+            "supervised_model_path": str(SUPERVISED_CLIP_MODEL_PATH) if scanner.backend_name != "sam31" and scanner.has_supervised_classifier else None,
+            "supervised_threshold": scanner.supervised_threshold if scanner.backend_name != "sam31" and scanner.has_supervised_classifier else None,
             "device": scanner.device,
         },
         "summary": {

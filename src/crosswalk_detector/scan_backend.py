@@ -6,8 +6,9 @@ from dataclasses import dataclass
 from io import BytesIO
 import math
 import os
+from pathlib import Path
 import ssl
-from typing import Iterable
+from typing import Any, Iterable, Protocol
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
@@ -15,12 +16,15 @@ import certifi
 import numpy as np
 from PIL import Image
 import torch
+from torch import nn
 from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor, CLIPModel
 
 EARTH_RADIUS_M = 6_378_137.0
 WMS_BASE_URL = "https://wms.geo.admin.ch/"
 DETECTOR_MODEL_ID = os.getenv("CROSSWALK_DETECTOR_MODEL", "IDEA-Research/grounding-dino-tiny")
 CLIP_MODEL_ID = os.getenv("CROSSWALK_CLIP_MODEL", "openai/clip-vit-base-patch32")
+DEFAULT_SUPERVISED_CLIP_MODEL_PATH = Path(__file__).resolve().parents[2] / "models" / "real-v1" / "real-balanced-256" / "clip_linear.pt"
+SUPERVISED_CLIP_MODEL_PATH = Path(os.getenv("CROSSWALK_SUPERVISED_CLIP_MODEL", str(DEFAULT_SUPERVISED_CLIP_MODEL_PATH)))
 POSITIVE_PROMPTS = (
     "an aerial photo of a zebra crossing painted across a road",
     "an aerial photo of a pedestrian crosswalk with parallel road stripes",
@@ -33,6 +37,19 @@ NEGATIVE_PROMPTS = (
     "an aerial photo of railway tracks",
     "an aerial photo of a parking lot",
 )
+SAM31_MODEL_VERSION = "sam3.1"
+SAM31_PROMPTS = tuple(
+    prompt.strip()
+    for prompt in os.getenv(
+        "CROSSWALK_SAM31_PROMPTS",
+        "zebra crossing|pedestrian crosswalk|yellow zebra crossing",
+    ).split("|")
+    if prompt.strip()
+)
+SAM31_CONFIDENCE_THRESHOLD = float(os.getenv("CROSSWALK_SAM31_CONFIDENCE", "0.18"))
+SAM31_TILE_THRESHOLD = float(os.getenv("CROSSWALK_SAM31_TILE_THRESHOLD", "0.18"))
+SAM31_MASK_COVERAGE_SCALE = float(os.getenv("CROSSWALK_SAM31_MASK_COVERAGE_SCALE", "120"))
+SAM31_BOX_OVERLAP_SCALE = float(os.getenv("CROSSWALK_SAM31_BOX_OVERLAP_SCALE", "10"))
 
 
 @dataclass(frozen=True)
@@ -62,6 +79,31 @@ class TileMetrics:
     detector_score: float
     combined_score: float
     label: str
+    supervised_probability: float | None = None
+
+
+@dataclass(frozen=True)
+class Sam31Detection:
+    prompt: str
+    score: float
+    box: tuple[float, float, float, float]
+    mask: np.ndarray
+
+
+@dataclass(frozen=True)
+class Sam31TileMetrics:
+    label: str
+    score: float
+    peak: float
+    coverage: float
+    box_overlap: float
+    prompt: str
+    detection_count: int
+
+
+class ScanBackend(Protocol):
+    device: str
+    backend_name: str
 
 
 def _device() -> str:
@@ -202,18 +244,158 @@ def _sigmoid(value: float) -> float:
     return 1.0 / (1.0 + math.exp(-value))
 
 
+def _cast_floating_input_to_module_dtype(module: nn.Module, args: tuple[Any, ...]) -> tuple[Any, ...]:
+    if not args or not torch.is_tensor(args[0]) or not hasattr(module, "weight"):
+        return args
+    input_tensor = args[0]
+    weight = module.weight
+    if input_tensor.is_floating_point() and input_tensor.dtype != weight.dtype:
+        return (input_tensor.to(weight.dtype), *args[1:])
+    return args
+
+
+class Sam31CrosswalkScanner:
+    backend_name = "sam31"
+
+    def __init__(self) -> None:
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.prompts = SAM31_PROMPTS
+        self.confidence_threshold = SAM31_CONFIDENCE_THRESHOLD
+        self.tile_threshold = SAM31_TILE_THRESHOLD
+        if self.device != "cuda":
+            raise RuntimeError("SAM3.1 scanning requires CUDA on the remote scan host.")
+        from sam3.model.sam3_image_processor import Sam3Processor
+        from sam3.model_builder import build_sam3_image_model, download_ckpt_from_hf
+
+        checkpoint_path = download_ckpt_from_hf(version=SAM31_MODEL_VERSION)
+        model = build_sam3_image_model(
+            checkpoint_path=checkpoint_path,
+            load_from_HF=False,
+            device=self.device,
+            compile=False,
+        )
+        self._register_dtype_guards(model)
+        self.processor = Sam3Processor(
+            model,
+            resolution=1008,
+            device=self.device,
+            confidence_threshold=self.confidence_threshold,
+        )
+
+    def _register_dtype_guards(self, model: nn.Module) -> None:
+        for module in model.modules():
+            if isinstance(module, (nn.Linear, nn.Conv2d, nn.LayerNorm)):
+                module.register_forward_pre_hook(_cast_floating_input_to_module_dtype)
+
+    def detect_scene(self, scene_image: Image.Image) -> list[Sam31Detection]:
+        state = self.processor.set_image(scene_image)
+        detections: list[Sam31Detection] = []
+        for prompt in self.prompts:
+            if hasattr(self.processor, "reset_all_prompts"):
+                self.processor.reset_all_prompts(state)
+            prompt_state = self.processor.set_text_prompt(prompt, state)
+            boxes = prompt_state.get("boxes")
+            masks = prompt_state.get("masks")
+            scores = prompt_state.get("scores")
+            if boxes is None or masks is None or scores is None:
+                continue
+            boxes_np = boxes.detach().float().cpu().numpy()
+            masks_np = masks.detach().cpu().numpy()
+            scores_np = scores.detach().float().cpu().numpy()
+            for box, mask, score in zip(boxes_np, masks_np, scores_np):
+                mask_2d = np.asarray(mask).squeeze().astype(bool)
+                detections.append(
+                    Sam31Detection(
+                        prompt=prompt,
+                        score=float(score),
+                        box=tuple(float(value) for value in box),
+                        mask=mask_2d,
+                    )
+                )
+        return detections
+
+    def score_tiles(self, scene: SceneRequest, tiles: list[TileRequest], detections: list[Sam31Detection]) -> list[Sam31TileMetrics]:
+        return [self.score_tile(scene, tile, detections) for tile in tiles]
+
+    def score_tile(self, scene: SceneRequest, tile: TileRequest, detections: list[Sam31Detection]) -> Sam31TileMetrics:
+        tile_bounds = _tile_pixel_bounds(scene, tile.bbox_mercator)
+        best_score = best_peak = best_coverage = best_box_overlap = 0.0
+        best_prompt = "sam3.1"
+        for detection in detections:
+            coverage = _mask_tile_coverage(detection.mask, tile_bounds)
+            box_overlap = _intersection_ratio(detection.box, tile_bounds)
+            peak = max(coverage * SAM31_MASK_COVERAGE_SCALE, box_overlap * SAM31_BOX_OVERLAP_SCALE)
+            score = detection.score * min(1.0, peak)
+            if score > best_score:
+                best_score = score
+                best_peak = detection.score
+                best_coverage = coverage
+                best_box_overlap = box_overlap
+                best_prompt = detection.prompt
+        label = "crosswalk" if best_score >= self.tile_threshold else "no_crosswalk"
+        return Sam31TileMetrics(
+            label=label,
+            score=best_score,
+            peak=best_peak,
+            coverage=best_coverage,
+            box_overlap=best_box_overlap,
+            prompt=best_prompt,
+            detection_count=len(detections),
+        )
+
+
 class HybridCrosswalkScanner:
+    backend_name = "hybrid"
+
     def __init__(self) -> None:
         self.device = _device()
         token = os.getenv("HF_TOKEN")
         self.clip_processor = AutoProcessor.from_pretrained(CLIP_MODEL_ID, token=token)
         self.clip_model = CLIPModel.from_pretrained(CLIP_MODEL_ID, token=token).to(self.device)
         self.clip_model.eval()
+        self.detector_processor = None
+        self.detector_model = None
+        self.supervised_threshold = 0.5
+        self.supervised_clip_classifier = self._load_supervised_clip_classifier()
+
+    @property
+    def has_supervised_classifier(self) -> bool:
+        return self.supervised_clip_classifier is not None
+
+    def _load_supervised_clip_classifier(self) -> nn.Module | None:
+        if not SUPERVISED_CLIP_MODEL_PATH.exists():
+            return None
+        payload = torch.load(SUPERVISED_CLIP_MODEL_PATH, map_location="cpu")
+        state_dict = payload.get("state_dict")
+        if not isinstance(state_dict, dict):
+            return None
+        classifier = torch.nn.Linear(512, 1)
+        classifier.load_state_dict(state_dict)
+        classifier.to(self.device)
+        classifier.eval()
+        self.supervised_threshold = float(payload.get("threshold", 0.5))
+        return classifier
+
+    def _ensure_detector(self) -> None:
+        if self.detector_processor is not None and self.detector_model is not None:
+            return
+        token = os.getenv("HF_TOKEN")
         self.detector_processor = AutoProcessor.from_pretrained(DETECTOR_MODEL_ID, token=token)
         self.detector_model = AutoModelForZeroShotObjectDetection.from_pretrained(DETECTOR_MODEL_ID, token=token).to(self.device)
         self.detector_model.eval()
 
+    def _clip_image_features(self, images: list[Image.Image]) -> torch.Tensor:
+        inputs = self.clip_processor(images=images, return_tensors="pt")
+        inputs = {key: value.to(self.device) for key, value in inputs.items()}
+        with torch.no_grad():
+            vision_output = self.clip_model.vision_model(**inputs)
+            features = self.clip_model.visual_projection(vision_output.pooler_output)
+            return torch.nn.functional.normalize(features, dim=1)
+
     def detect_boxes(self, scene_image: Image.Image) -> list[tuple[float, tuple[float, float, float, float]]]:
+        self._ensure_detector()
+        assert self.detector_processor is not None
+        assert self.detector_model is not None
         text = "zebra crossing. crosswalk. pedestrian crossing."
         inputs = self.detector_processor(images=scene_image, text=text, return_tensors="pt").to(self.device)
         with torch.no_grad():
@@ -229,6 +411,14 @@ class HybridCrosswalkScanner:
         for score, box in zip(results["scores"], results["boxes"]):
             detections.append((float(score), tuple(float(value) for value in box)))
         return detections
+
+    def score_supervised_context_images(self, images: list[Image.Image]) -> list[float]:
+        if self.supervised_clip_classifier is None:
+            return []
+        features = self._clip_image_features(images)
+        with torch.no_grad():
+            probabilities = torch.sigmoid(self.supervised_clip_classifier(features).squeeze(1))
+        return [float(value) for value in probabilities.cpu().tolist()]
 
     def score_context_images(self, images: list[Image.Image]) -> list[tuple[float, float]]:
         texts = list(POSITIVE_PROMPTS + NEGATIVE_PROMPTS)
@@ -261,6 +451,18 @@ def _intersection_ratio(box: tuple[float, float, float, float], tile_bounds: tup
     return overlap / tile_area
 
 
+def _mask_tile_coverage(mask: np.ndarray, tile_bounds: tuple[float, float, float, float]) -> float:
+    height, width = mask.shape
+    left = max(0, min(width, int(math.floor(tile_bounds[0]))))
+    top = max(0, min(height, int(math.floor(tile_bounds[1]))))
+    right = max(0, min(width, int(math.ceil(tile_bounds[2]))))
+    bottom = max(0, min(height, int(math.ceil(tile_bounds[3]))))
+    if right <= left or bottom <= top:
+        return 0.0
+    tile_mask = mask[top:bottom, left:right]
+    return float(tile_mask.mean()) if tile_mask.size else 0.0
+
+
 def detector_overlap_score(detections: Iterable[tuple[float, tuple[float, float, float, float]]], tile_bounds: tuple[float, float, float, float]) -> float:
     best = 0.0
     for score, box in detections:
@@ -272,14 +474,29 @@ def detector_overlap_score(detections: Iterable[tuple[float, tuple[float, float,
     return best
 
 
-def decide_tile_label(clip_positive: float, clip_negative: float, heuristic_probability: float, detector_score: float, threshold: float) -> TileMetrics:
-    combined = (clip_positive * 0.45) + (heuristic_probability * 0.2) + (detector_score * 0.35)
-    positive_margin = clip_positive - clip_negative
-    positive = (
-        detector_score >= 0.24
-        or (combined >= threshold and positive_margin >= 0.03)
-        or (heuristic_probability >= 0.58 and clip_positive >= max(0.18, threshold - 0.08))
+def decide_tile_label(
+    clip_positive: float,
+    clip_negative: float,
+    heuristic_probability: float,
+    detector_score: float,
+    threshold: float,
+    supervised_probability: float | None = None,
+) -> TileMetrics:
+    combined = (
+        supervised_probability
+        if supervised_probability is not None
+        else (clip_positive * 0.45) + (heuristic_probability * 0.2) + (detector_score * 0.35)
     )
+
+
+def create_scan_backend() -> ScanBackend:
+    backend = os.getenv("CROSSWALK_SCAN_BACKEND", "sam31").strip().lower()
+    if backend in {"sam31", "sam3.1", "sam3"}:
+        return Sam31CrosswalkScanner()
+    if backend in {"hybrid", "clip", "clip-linear"}:
+        return HybridCrosswalkScanner()
+    raise ValueError(f"Unknown CROSSWALK_SCAN_BACKEND: {backend}")
+    positive = combined >= threshold
     return TileMetrics(
         clip_positive=clip_positive,
         clip_negative=clip_negative,
@@ -287,4 +504,5 @@ def decide_tile_label(clip_positive: float, clip_negative: float, heuristic_prob
         detector_score=detector_score,
         combined_score=combined,
         label="crosswalk" if positive else "no_crosswalk",
+        supervised_probability=supervised_probability,
     )

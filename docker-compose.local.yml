@@ -1,0 +1,16 @@
+services:
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      PORT: "8787"
+      TAILSCALE_SERVE: "0"
+      CROSSWALK_REMOTE_PASSWORD: "${CROSSWALK_REMOTE_PASSWORD:-}"
+    volumes:
+      - ./.local:/app/.local
+      - ./configs:/app/configs
+      - ./data:/app/data
+    restart: unless-stopped

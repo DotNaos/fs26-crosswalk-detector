@@ -34,6 +34,7 @@ export type DatasetTile = {
 };
 
 export type DatasetContract = {
+  display_name?: string;
   run_name: string;
   export_name: string;
   target_per_class?: number;
@@ -44,6 +45,7 @@ export type DatasetContract = {
 };
 
 export type DatasetSummary = {
+  display_name?: string;
   run_name: string;
   export_name: string;
   target_per_class?: number | null;
@@ -63,6 +65,7 @@ export type ScenePayload = {
 };
 
 export type RealDatasetConfig = {
+  display_name?: string;
   run_name: string;
   export_name: string;
   target_per_class: number;
@@ -83,10 +86,16 @@ export type RealDatasetConfig = {
     longitude: number;
     size_m: number;
     image_px: number;
+    autopilot_rank?: number;
+    autopilot_score?: number;
+    autopilot_city_id?: string;
+    autopilot_cell_id?: string;
   }>;
+  autopilot?: unknown;
 };
 
 export type DatasetListEntry = {
+  display_name?: string;
   run_name: string;
   export_name: string;
   tile_count: number;
@@ -117,7 +126,7 @@ export type BrowserLabelSuggestion = {
   review_source: string;
 };
 
-export type MapBasemap = "osm" | "swisstopo";
+export type MapBasemap = "osm" | "swisstopo" | "roads";
 
 export type SceneReviewState = {
   scan_radius: number;
@@ -130,4 +139,88 @@ export type ReviewState = {
   selected_tile_id?: string;
   map_zoom?: number;
   scenes: Record<string, SceneReviewState>;
+};
+
+export type RemoteControllerConfig = {
+  server_id?: string;
+  server_name?: string;
+  host: string;
+  username: string;
+  port: number;
+  repo_path: string;
+  execution_mode: RemoteExecutionMode;
+  sbatch_script_path: string;
+  direct_run_command: string;
+  partition: string;
+  time_limit: string;
+  poll_interval_seconds: number;
+};
+
+export type RemoteExecutionMode = "slurm" | "direct";
+
+export type RemoteServerOption = {
+  id: string;
+  label: string;
+  kind?: "ssh" | "fake";
+  hostname?: string;
+  host: string;
+  username: string;
+  port: number;
+  repo_path: string;
+  execution_mode?: RemoteExecutionMode;
+  sbatch_script_path?: string;
+  direct_run_command?: string;
+  partition?: string;
+  time_limit?: string;
+};
+
+export type RemoteControllerSnapshot = {
+  config: RemoteControllerConfig;
+  server_options: RemoteServerOption[];
+  selected_server_id: string | null;
+  connected: boolean;
+  password_configured: boolean;
+  sshpass_available: boolean;
+  expect_available: boolean;
+  password_transport_available: boolean;
+  tmux_available: boolean;
+  remote_home: string | null;
+  remote_hostname: string | null;
+  last_error: string | null;
+};
+
+export type RemoteJobStatus =
+  | "idle"
+  | "bootstrapping"
+  | "syncing"
+  | "submitting"
+  | "queued"
+  | "running"
+  | "completed"
+  | "cancelled"
+  | "failed";
+
+export type RemoteScanJobRecord = {
+  id: string;
+  scene_id: string;
+  scene_label: string;
+  tile_count: number;
+  created_at: string;
+  updated_at: string;
+  tmux_session: string;
+  log_tmux_session: string | null;
+  status: RemoteJobStatus;
+  execution_mode: RemoteExecutionMode;
+  remote_state: string | null;
+  slurm_job_id: string | null;
+  error: string | null;
+  result_available: boolean;
+  log_tail: string[];
+  summary: {
+    total: number;
+    crosswalk: number;
+    no_crosswalk: number;
+  } | null;
+  live_results: Record<string, BrowserLabelSuggestion>;
+  live_scanned_tile_ids: string[];
 };

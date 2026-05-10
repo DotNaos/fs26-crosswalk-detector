@@ -1,7 +1,11 @@
 import { spawnSync } from "node:child_process";
+import { resolve } from "node:path";
+import { loadLocalEnv } from "./src/local-env";
 
 const PORTLESS_URL = "http://crosswalk-review.localhost:1355";
 const PORTLESS_APP_NAME = "crosswalk-review";
+const WEB_ROOT = import.meta.dir;
+const PROJECT_ROOT = resolve(WEB_ROOT, "..");
 
 type Subprocess = {
   kill(): void;
@@ -9,6 +13,9 @@ type Subprocess = {
 };
 
 let client: Subprocess | null = null;
+let apiServer: Subprocess | null = null;
+
+loadLocalEnv(PROJECT_ROOT, WEB_ROOT);
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -24,7 +31,16 @@ function commandExists(name: string) {
 
 function startClient(): Subprocess {
   return Bun.spawn(["bun", "run", "dev:client"], {
-    cwd: import.meta.dir,
+    cwd: WEB_ROOT,
+    stdout: "inherit",
+    stderr: "inherit",
+    stdin: "inherit",
+  });
+}
+
+function startApiServer(): Subprocess {
+  return Bun.spawn(["env", "PORT=8787", "bun", "run", "src/server.ts"], {
+    cwd: WEB_ROOT,
     stdout: "inherit",
     stderr: "inherit",
     stdin: "inherit",
@@ -34,7 +50,7 @@ function startClient(): Subprocess {
 function activePortlessRoute(name: string) {
   if (!commandExists("portless")) return null;
   const listed = spawnSync("portless", ["list"], {
-    cwd: import.meta.dir,
+    cwd: WEB_ROOT,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
   });
@@ -101,7 +117,7 @@ async function ensureTailnetShare() {
   const tailscaleTarget = `http://127.0.0.1:${route.port}`;
 
   const serve = spawnSync("tailscale", ["serve", "--bg", tailscaleTarget], {
-    cwd: import.meta.dir,
+    cwd: WEB_ROOT,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -119,7 +135,7 @@ async function ensureTailnetShare() {
   }
 
   const status = spawnSync("tailscale", ["status", "--json"], {
-    cwd: import.meta.dir,
+    cwd: WEB_ROOT,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -150,13 +166,16 @@ async function ensureTailnetShare() {
 
 const shutdown = () => {
   client?.kill();
+  apiServer?.kill();
 };
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
 await ensureClientOwnership();
+apiServer = startApiServer();
+await sleep(600);
 client = startClient();
 await ensureTailnetShare();
-await client?.exited;
+await Promise.race([client?.exited, apiServer?.exited].filter(Boolean));
 shutdown();

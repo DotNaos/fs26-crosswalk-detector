@@ -1,0 +1,25 @@
+FROM oven/bun:1
+
+WORKDIR /app
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    git \
+    openssh-client \
+    sshpass \
+    tmux \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY . /app
+
+WORKDIR /app/web
+RUN bun install --frozen-lockfile
+RUN bun run build
+
+ENV PORT=8787
+ENV TAILSCALE_SERVE=0
+
+EXPOSE 8787
+
+CMD ["bun", "run", "src/server.ts"]

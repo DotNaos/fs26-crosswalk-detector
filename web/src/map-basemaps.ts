@@ -7,6 +7,7 @@ export const MAP_BASEMAPS: Record<
     url: string;
     attribution: string;
     maxZoom?: number;
+    roadsOverlay?: boolean;
   }
 > = {
   osm: {
@@ -20,5 +21,12 @@ export const MAP_BASEMAPS: Record<
     url: "https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.swissimage-product/default/current/3857/{z}/{x}/{y}.jpeg",
     attribution: '&copy; <a href="https://www.swisstopo.admin.ch/">swisstopo</a>',
     maxZoom: 19,
+  },
+  roads: {
+    label: "ROADS",
+    url: "https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.swissimage-product/default/current/3857/{z}/{x}/{y}.jpeg",
+    attribution: '&copy; <a href="https://www.swisstopo.admin.ch/">swisstopo</a>',
+    maxZoom: 19,
+    roadsOverlay: true,
   },
 };
