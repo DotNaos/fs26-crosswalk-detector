@@ -51,7 +51,7 @@ export function CreateDatasetDrawer({
               <Input placeholder="Zurich HB review set" value={name} onChange={(event) => onNameChange(event.target.value)} />
             </TextField>
 
-            <Select fullWidth selectedKey={sceneId || null} variant="secondary" onSelectionChange={(key) => typeof key === "string" && onSceneChange(key)}>
+            <Select aria-label="Area" fullWidth selectedKey={sceneId || null} variant="secondary" onSelectionChange={(key) => typeof key === "string" && onSceneChange(key)}>
               <Label>Area</Label>
               <Select.Trigger>
                 <Select.Value>

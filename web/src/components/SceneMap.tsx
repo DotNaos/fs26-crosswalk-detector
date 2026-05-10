@@ -12,6 +12,7 @@ import { normalizeSceneReviewState } from "../review-state";
 import type { BrowserLabelSuggestion, DatasetSummary, DatasetTile, MapBasemap, ReviewState, SceneReviewState } from "../types";
 import { useMapValidationRuntime } from "../useMapValidationRuntime";
 import {
+  bboxToLatLngBounds,
   formatProbability,
   sceneLabel,
   sceneLatLngBounds,
@@ -131,11 +132,13 @@ export function SceneMap({
     [visibleAutopilotPlan],
   );
   const bvhOverlayCells = useMemo(() => {
-    const cells = visibleAutopilotPlan?.bvhCells ?? [];
+    const plan = visibleAutopilotPlan;
+    if (!plan) return [];
+    const cells = plan.bvhCells ?? [];
     if (!cells.length) return [];
     return cells.map((cell) => ({
       ...cell,
-      bboxMercator: snapBboxToLeafletTileGrid(cell.bboxMercator, cell.sizeM ?? visibleAutopilotPlan.sceneSizeM),
+      bboxMercator: snapBboxToLeafletTileGrid(cell.bboxMercator, cell.sizeM ?? plan.sceneSizeM),
     }));
   }, [visibleAutopilotPlan]);
   const showGrid = Boolean(selectedScene && sceneTiles.length && effectiveMapZoom >= GRID_ZOOM_THRESHOLD);

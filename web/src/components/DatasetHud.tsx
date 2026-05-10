@@ -14,6 +14,7 @@ export function DatasetHud({ datasets, currentValue, compact = false, onSelect, 
   const selectedEntry = datasets.find((entry) => `${entry.run_name}::${entry.export_name}` === currentValue);
   const selector = (
     <Select
+      aria-label="Dataset"
       className={compact ? "w-52 max-w-[56vw]" : undefined}
       fullWidth={!compact}
       placeholder="Choose dataset"
@@ -65,7 +66,7 @@ export function DatasetHud({ datasets, currentValue, compact = false, onSelect, 
           </Card.Title>
           <Card.Description>Select the dataset you want to review.</Card.Description>
         </div>
-        <Button isIconOnly onPress={onCreate} size="sm" variant="secondary">
+        <Button aria-label="Create dataset" isIconOnly onPress={onCreate} size="sm" variant="secondary">
           <Plus className="size-4" />
         </Button>
       </Card.Header>

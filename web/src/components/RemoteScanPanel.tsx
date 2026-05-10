@@ -271,6 +271,7 @@ export function RemoteScanPanel({
         <div className="flex flex-wrap gap-2">
           {serverOptions.length ? (
             <Select
+              aria-label="Server"
               className="min-w-56"
               isDisabled={busy}
               selectedKey={selectedServer?.id ?? null}
