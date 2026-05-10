@@ -126,11 +126,6 @@ export function SceneMap({
   }, [focusSceneId, focusedScene?.scene_id, focusedScene?.latitude, focusedScene?.longitude, focusedScene?.size_m, visibleAutopilotPlan]);
   const mapCenter = useMemo<[number, number]>(() => (selectedScene?.latitude && selectedScene?.longitude ? [Number(selectedScene.latitude), Number(selectedScene.longitude)] : DEFAULT_MAP_CENTER), [selectedScene?.latitude, selectedScene?.longitude]);
   const effectiveMapZoom = mapInstance?.getZoom() ?? mapZoom;
-  const showAutopilotDetailGrid = effectiveMapZoom >= 10;
-  const cityFineGridCells = useMemo(
-    () => visibleAutopilotPlan?.coarseCells.filter((cell) => cell.status !== "background") ?? [],
-    [visibleAutopilotPlan],
-  );
   const bvhOverlayCells = useMemo(() => {
     const plan = visibleAutopilotPlan;
     if (!plan) return [];
@@ -141,7 +136,7 @@ export function SceneMap({
       bboxMercator: snapBboxToLeafletTileGrid(cell.bboxMercator, cell.sizeM ?? plan.sceneSizeM),
     }));
   }, [visibleAutopilotPlan]);
-  const showGrid = Boolean(selectedScene && sceneTiles.length && effectiveMapZoom >= GRID_ZOOM_THRESHOLD);
+  const showGrid = Boolean(selectedScene && sceneTiles.length && effectiveMapZoom >= GRID_ZOOM_THRESHOLD && !visibleAutopilotPlan);
   const sceneReviewState = useMemo(() => normalizeSceneReviewState(reviewState), [reviewState]);
   const autopilotSceneMode = Boolean(selectedScene?.autopilot_cell_id);
   const [liveSuggestions, setLiveSuggestions] = useState<Record<string, BrowserLabelSuggestion>>({});
@@ -624,10 +619,8 @@ export function SceneMap({
             activeTileDashArray={activeTileDashArray}
             basemap={basemap}
             bvhOverlayCells={bvhOverlayCells}
-            cityFineGridCells={cityFineGridCells}
             displaySuggestions={displaySuggestions}
             droppedTileDashArray={droppedTileDashArray}
-            effectiveMapZoom={effectiveMapZoom}
             focusSceneId={focusSceneId}
             focusedSceneId={selectedSceneId}
             footprintCenter={footprintCenter}
@@ -645,7 +638,6 @@ export function SceneMap({
             selectedBounds={selectedBounds}
             selectedSceneId={selectedSceneId}
             selectedTileId={selectedTileId}
-            showAutopilotDetailGrid={showAutopilotDetailGrid}
             showGrid={showGrid}
             visibleAutopilotPlan={visibleAutopilotPlan}
           />

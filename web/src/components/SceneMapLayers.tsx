@@ -7,17 +7,15 @@ import { bboxCenterLatLng, bboxToLatLngBounds, tileTone } from "../utils";
 import { MAP_BASEMAPS } from "../map-basemaps";
 import { MapCamera } from "./MapCamera";
 import { MapEventBridge } from "./MapEventBridge";
-import { bvhLineColor, bvhLineWeight, dashArrayForZoom } from "./scene-map-geometry";
+import { bvhLineColor, bvhLineWeight } from "./scene-map-geometry";
 
 type SceneMapLayersProps = {
   activeTile?: DatasetTile;
   activeTileDashArray: string;
   basemap: MapBasemap;
   bvhOverlayCells: AutopilotBvhCell[];
-  cityFineGridCells: AutopilotPlan["coarseCells"];
   displaySuggestions: Record<string, BrowserLabelSuggestion>;
   droppedTileDashArray: string;
-  effectiveMapZoom: number;
   focusSceneId?: string;
   focusedSceneId?: string;
   footprintCenter: [number, number] | null;
@@ -35,7 +33,6 @@ type SceneMapLayersProps = {
   selectedBounds: ReturnType<typeof bboxToLatLngBounds>;
   selectedSceneId?: string;
   selectedTileId?: string;
-  showAutopilotDetailGrid: boolean;
   showGrid: boolean;
   visibleAutopilotPlan: AutopilotPlan | null;
 };
@@ -45,10 +42,8 @@ export function SceneMapLayers({
   activeTileDashArray,
   basemap,
   bvhOverlayCells,
-  cityFineGridCells,
   displaySuggestions,
   droppedTileDashArray,
-  effectiveMapZoom,
   focusSceneId,
   focusedSceneId,
   footprintCenter,
@@ -66,7 +61,6 @@ export function SceneMapLayers({
   selectedBounds,
   selectedSceneId,
   selectedTileId,
-  showAutopilotDetailGrid,
   showGrid,
   visibleAutopilotPlan,
 }: SceneMapLayersProps) {
@@ -125,100 +119,6 @@ export function SceneMapLayers({
           })
         : null}
 
-      {cityFineGridCells.map((cell) => {
-        const bounds = bboxToLatLngBounds(cell.bboxMercator);
-        if (!bounds) return null;
-        const isUrban = cell.status === "urban";
-        return (
-          <Rectangle
-            key={`autopilot-city-grid-${cell.id}`}
-            bounds={bounds}
-            interactive={false}
-            pathOptions={{
-              color: isUrban ? "#34d399" : "#67e8f9",
-              weight: isUrban ? 1.15 : 0.85,
-              opacity: isUrban ? 0.7 : 0.42,
-              fillColor: isUrban ? "#22c55e" : "#06b6d4",
-              fillOpacity: isUrban ? 0.045 : 0.018,
-              lineCap: "square",
-              lineJoin: "round",
-              dashArray: isUrban ? undefined : "4 6",
-              className: `autopilot-city-grid autopilot-city-grid-${cell.status}`,
-            }}
-          />
-        );
-      })}
-
-      {showAutopilotDetailGrid
-        ? visibleAutopilotPlan?.panels.map((panel) => {
-            const bounds = bboxToLatLngBounds(panel.bboxMercator);
-            if (!bounds) return null;
-            return (
-              <Rectangle
-                key={`autopilot-panel-${panel.id}`}
-                bounds={bounds}
-                pathOptions={{
-                  color: panel.plannedScenes > 0 ? "#38bdf8" : "#64748b",
-                  weight: panel.plannedScenes > 0 ? 1.2 : 0.8,
-                  opacity: panel.plannedScenes > 0 ? 0.34 : 0.18,
-                  fillColor: "#38bdf8",
-                  fillOpacity: 0,
-                  dashArray: dashArrayForZoom(effectiveMapZoom, 10, 10),
-                }}
-              />
-            );
-          })
-        : null}
-
-      {showAutopilotDetailGrid
-        ? visibleAutopilotPlan?.cells
-            .filter((cell) => cell.status !== "panel")
-            .map((cell) => {
-              const bounds = bboxToLatLngBounds(cell.bboxMercator);
-              if (!bounds) return null;
-              const isSelectedCell = cell.sceneId === selectedSceneId;
-              const isPlannedScene = Boolean(cell.sceneId);
-              return (
-                <Rectangle
-                  key={`autopilot-cell-${cell.id}`}
-                  bounds={bounds}
-                  pathOptions={{
-                    color: isSelectedCell ? "#fff2c2" : isPlannedScene ? "#22c55e" : "#f59e0b",
-                    weight: isSelectedCell ? 4 : isPlannedScene ? 1.5 : 1,
-                    opacity: isSelectedCell ? 1 : 0.58,
-                    fillColor: isPlannedScene ? "#22c55e" : "#f59e0b",
-                    fillOpacity: isSelectedCell ? 0.08 : 0,
-                    dashArray: isPlannedScene ? undefined : dashArrayForZoom(effectiveMapZoom, 6, 8),
-                    className: `autopilot-cell autopilot-cell-${cell.status}`,
-                  }}
-                  eventHandlers={cell.sceneId ? { click: () => onSelectScene(cell.sceneId!) } : undefined}
-                />
-              );
-            })
-        : null}
-
-      {bvhOverlayCells.map((cell) => {
-        const bounds = bboxToLatLngBounds(cell.bboxMercator);
-        if (!bounds) return null;
-        return (
-          <Rectangle
-            key={`autopilot-bvh-halo-${cell.id}`}
-            bounds={bounds}
-            interactive={false}
-            pathOptions={{
-              color: "#020617",
-              weight: bvhLineWeight(cell.depth) + 2,
-              opacity: cell.depth <= 2 ? 0.5 : 0.34,
-              fillOpacity: 0,
-              lineCap: "square",
-              lineJoin: "round",
-              dashArray: "18 10",
-              className: `autopilot-bvh autopilot-bvh-halo autopilot-bvh-depth-${cell.depth}`,
-            }}
-          />
-        );
-      })}
-
       {bvhOverlayCells.map((cell) => {
         const bounds = bboxToLatLngBounds(cell.bboxMercator);
         if (!bounds) return null;
@@ -230,11 +130,11 @@ export function SceneMapLayers({
             pathOptions={{
               color: bvhLineColor(cell),
               weight: bvhLineWeight(cell.depth),
-              opacity: cell.depth <= 2 ? 0.96 : 0.86,
+              opacity: cell.depth <= 2 ? 0.88 : 0.72,
               fillOpacity: 0,
               lineCap: "square",
               lineJoin: "round",
-              dashArray: "18 10",
+              dashArray: cell.status === "urban" ? undefined : "14 10",
               className: `autopilot-bvh autopilot-bvh-depth-${cell.depth}`,
             }}
           />
