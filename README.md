@@ -284,6 +284,7 @@ The root `vercel.json` is required because the web app lives in `web/`, while th
 
 ## Main Documentation
 
+- Exam notes: `docs/exam-notes.md`
 - Project report draft: `docs/project-report-draft.md`
 - Project decisions: `docs/project-decisions.md`
 - Static dataset deployment: `docs/static-dataset-deployment.md`

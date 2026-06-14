@@ -1,6 +1,6 @@
 # Project Report Draft: Crosswalk Detection in Aerial Images
 
-Status: 2026-05-18
+Status: 2026-06-14
 
 ## How to Read This Report
 
@@ -311,16 +311,16 @@ This improved precision and image-level accuracy. It showed that the main proble
 
 The third version added more hard negatives mined from v2. This became the strongest image-level classifier so far.
 
-v3 is currently the best default if the goal is to decide whether a tile contains a crosswalk.
+v3 produced the strongest image-level classification metrics in the iteration comparison.
 
 ### 5.4 v4: Road Context as Model Input
 
 The fourth version adds road context as a fourth input channel.
 
-This improves mask quality and makes the model more aware of plausible road areas. However, it does not outperform v3 on every image-level metric. The result is:
+This improves mask quality and makes the model more aware of plausible road areas. It is the current documented checkpoint used by the quick-start workflow and release assets. The result is:
 
 - v4 is best for segmentation quality;
-- v3 is still slightly better as the default image-level classifier.
+- v4 is the final documented model because it combines strong classification results with better visual explainability.
 
 ## 6. Results
 
@@ -350,10 +350,7 @@ v4 gives the best segmentation result. It reaches:
 - positive Dice: `0.794408`;
 - positive IoU: `0.658937`.
 
-The practical conclusion is that the project now has two strong candidates:
-
-- v3 for final classification;
-- v4 for final mask visualization and explainability.
+The practical conclusion is that v4 is the best final default for this project: it keeps the image-level classification result strong and also gives the clearest mask visualization for explaining predictions.
 
 ### 6.2 Threshold Calibration
 
@@ -418,8 +415,7 @@ The current system still has limitations:
 - some pseudo-labels are wrong because they were generated automatically;
 - very small or partially visible crosswalks can be missed;
 - some road markings and parking structures can still trigger false positives;
-- the final threshold has not yet been fixed for the submission;
-- a human-reviewed subset should still be added for stronger final validation.
+- the threshold changes the balance between false positives and missed crosswalks.
 
 These limitations do not invalidate the project. They describe the current state honestly and point to realistic next improvements.
 
@@ -442,13 +438,9 @@ The project already satisfies the main technical requirements:
 - it evaluates the model on a held-out test split;
 - it shows iterative optimization across several model versions.
 
-Before final submission, the following should still be prepared:
+The final documented model is CrossMaskNet v4. The public dataset metadata and the v4 checkpoint are stored as GitHub Release assets and are restored automatically by the normal commands. The README shows the exact commands for running the released checkpoint, training a small fresh model, and testing a freshly trained model.
 
-- package or document the exact dataset export used for training;
-- decide whether v3 or v4 is the final submitted model;
-- include example images with predicted masks;
-- complete a small human review of important failure cases;
-- finalize this report into a concise two-page version if required.
+For the optional report, this draft should be condensed to the five rubric topics: dataset key facts, model architecture, optimizations, results, and personal insights.
 
 ## 11. Final Positioning
 

@@ -6,8 +6,24 @@ It captures the main decisions made so far, the rationale behind them, and the e
 ## Problem Definition
 
 - Task: classify a `25 m x 25 m` aerial tile as either `crosswalk` or `no_crosswalk`.
-- The final project model should solve the course task directly as a binary classification problem.
-- Segmentation is useful for pre-labeling and analysis, but not the final task itself.
+- The final project model solves the course task as binary classification derived from a predicted segmentation mask.
+- Segmentation is part of the submitted model because it makes the decision inspectable: CrossMaskNet predicts a crosswalk mask first, then converts mask coverage into `crosswalk` / `no_crosswalk`.
+
+## Current Submission State
+
+- Final documented model: `CrossMaskNet v4`.
+- Model type: custom compact U-Net-style PyTorch segmentation model trained from scratch.
+- Input: RGB aerial tile plus road-context channel.
+- Output: one-channel crosswalk mask, converted into a binary image-level class by thresholding mask coverage.
+- Dataset metadata: `sam3-500k-masks-v1`, restored from the public dataset release when needed.
+- Current training export: `5,800` samples derived from the 500k metadata dataset.
+- Current released test metrics:
+  - accuracy: `0.961165`
+  - precision: `0.957746`
+  - recall: `0.966825`
+  - positive Dice: `0.794408`
+  - positive IoU: `0.658937`
+- SAM3 is a pseudo-label generator for dataset construction, not the submitted model.
 
 ## Dataset Strategy
 
@@ -87,12 +103,9 @@ Reasoning:
 
 ### Final Course Model
 
-- Start with a small image classifier as the project baseline.
-- Good baseline candidates:
-  - `EfficientNet-B0`
-  - `ResNet-18`
-  - `ConvNeXt-Tiny`
-- The final model should stay easy to train, explain, and evaluate against the course rubric.
+- Use CrossMaskNet v4 as the final documented model.
+- Keep the model easy to train, run, and explain against the course rubric.
+- Explain the classification as segmentation-first: the model predicts a mask, then mask coverage produces the final binary decision.
 
 ## Compute Decision
 
