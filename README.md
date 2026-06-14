@@ -4,6 +4,12 @@ Semester project for detecting pedestrian crossings in Swiss aerial imagery.
 
 Live dataset explorer: https://crosswalk-detector.vercel.app
 
+The dataset is provided with the project as public metadata, not as committed
+raw aerial images. The raw Swisstopo images are downloaded reproducibly when
+needed by `uv run dataset`, `uv run train`, or `uv run test`. The helper script
+`scripts/download_submission_assets.py` restores the released dataset metadata
+and model checkpoint into the expected local folders.
+
 ## What This Project Does
 
 The project trains and evaluates a custom deep-learning model that detects crosswalks in small aerial image tiles.
