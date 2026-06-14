@@ -49,11 +49,12 @@ def download_images_main() -> int:
     from .input_images import download_input_images
 
     output_dir = _resolve(args.output_dir)
+    positive_count, negative_count = _image_counts(args.count, args.positive_ratio, args.positive_count, args.negative_count)
     summary = download_input_images(
         _resolve(args.dataset),
         output_dir,
-        positive_count=args.positive_count,
-        negative_count=args.negative_count,
+        positive_count=positive_count,
+        negative_count=negative_count,
         image_size=args.image_size,
         seed=args.seed,
         min_confidence=args.min_confidence,
@@ -215,8 +216,10 @@ def _download_images_parser(add_help: bool = True) -> argparse.ArgumentParser:
     parser.add_argument("--profile", default="default", help="Prepared project configuration.")
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET, help="Metadata dataset location.")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_INPUT_IMAGES, help="Where downloaded input images are written.")
-    parser.add_argument("--positive-count", type=int, default=10, help="How many source-positive example images to download.")
-    parser.add_argument("--negative-count", type=int, default=10, help="How many source-negative example images to download.")
+    parser.add_argument("--count", type=int, default=20, help="Total number of input images to download.")
+    parser.add_argument("--positive-ratio", type=float, default=0.5, help="Share of downloaded images that should come from positive source examples.")
+    parser.add_argument("--positive-count", type=int, default=None, help="Explicit positive image count. Overrides --count/--positive-ratio when used with --negative-count.")
+    parser.add_argument("--negative-count", type=int, default=None, help="Explicit negative image count. Overrides --count/--positive-ratio when used with --positive-count.")
     parser.add_argument("--image-size", type=int, default=128, help="Output image size in pixels.")
     parser.add_argument("--min-confidence", type=float, default=0.4, help="Minimum source-label confidence for positive examples.")
     parser.add_argument("--min-mask-coverage", type=float, default=0.01, help="Minimum source mask coverage for positive examples.")
@@ -302,6 +305,21 @@ def _resolve(path: Path) -> Path:
 def _require_default_profile(profile: str) -> None:
     if profile != "default":
         raise ValueError("Only --profile default is defined.")
+
+
+def _image_counts(count: int, positive_ratio: float, positive_count: int | None, negative_count: int | None) -> tuple[int, int]:
+    if positive_count is not None or negative_count is not None:
+        if positive_count is None or negative_count is None:
+            raise ValueError("Use both --positive-count and --negative-count, or use --count with --positive-ratio.")
+        if positive_count < 0 or negative_count < 0:
+            raise ValueError("Image counts must be zero or greater.")
+        return positive_count, negative_count
+    if count < 0:
+        raise ValueError("--count must be zero or greater.")
+    if not 0.0 <= positive_ratio <= 1.0:
+        raise ValueError("--positive-ratio must be between 0 and 1.")
+    positive = round(count * positive_ratio)
+    return positive, count - positive
 
 
 if __name__ == "__main__":

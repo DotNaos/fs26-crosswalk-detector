@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from PIL import Image
 
 from crosswalk_detector import input_images
+from crosswalk_detector.workflow import _image_counts
 from crosswalk_detector.train_crossmask import MaskCandidate
 
 
@@ -25,6 +26,15 @@ def test_download_input_images_writes_flat_input_folder(tmp_path: Path, monkeypa
     assert len(list(output_dir.glob("*.jpg"))) == 2
     assert (output_dir / "input_images.csv").exists()
     assert (output_dir / "summary.json").exists()
+
+
+def test_image_counts_from_total_and_ratio() -> None:
+    assert _image_counts(20, 0.5, None, None) == (10, 10)
+    assert _image_counts(5, 0.6, None, None) == (3, 2)
+
+
+def test_image_counts_can_be_explicit() -> None:
+    assert _image_counts(20, 0.5, 2, 7) == (2, 7)
 
 
 def _candidate(tile_id: str, label: str) -> MaskCandidate:

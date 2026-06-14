@@ -58,7 +58,7 @@ Using `uv` (recommended):
 
 ```bash
 uv sync
-uv run download-images --positive-count 10 --negative-count 10 --output-dir data/input/crossmask-images
+uv run download-images --count 20 --positive-ratio 0.5 --output-dir data/input/crossmask-images
 uv run test --input-dir data/input/crossmask-images --output-dir data/predictions/my-run --positive-threshold 0.005
 uv run dataset
 uv run train
@@ -71,7 +71,7 @@ Using Python:
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e .
-python -m crosswalk_detector.workflow download-images --positive-count 10 --negative-count 10 --output-dir data/input/crossmask-images
+python -m crosswalk_detector.workflow download-images --count 20 --positive-ratio 0.5 --output-dir data/input/crossmask-images
 python -m crosswalk_detector.workflow test --input-dir data/input/crossmask-images --output-dir data/predictions/my-run --positive-threshold 0.005
 python -m crosswalk_detector.workflow dataset
 python -m crosswalk_detector.workflow train
@@ -91,7 +91,7 @@ uv run train --skip-raw-cache --positive-limit 20 --negative-ratio 1 \
   --rebuild-export
 uv run test --model-root models/crossmask/sam3-500k-road-channel-v4
 uv run test --input-dir path/to/images --output-dir data/predictions/my-run --positive-threshold 0.005
-uv run download-images --output-dir data/input/demo-images --positive-count 10 --negative-count 10
+uv run download-images --count 20 --positive-ratio 0.5 --output-dir data/input/demo-images
 ```
 
 The normal workflow commands are:
@@ -120,8 +120,9 @@ All options are optional. If you omit them, the commands use these defaults:
 | `--output-dir` | `data/predictions/crossmask-test` | Where `test --input-dir` writes classified images, overlays, and summary files. |
 | `--positive-threshold` | `0.005` | Minimum mask coverage for `test --input-dir` to classify an image as `positive`. Images below this value go to `negative/`. Lower values put more images in `positive/`; higher values put more images in `negative/`. |
 | `--no-overlays` | off | Skips writing overlay images for positive predictions. |
-| `--positive-count` | `10` | Number of source-positive example images written by `download-images`. |
-| `--negative-count` | `10` | Number of source-negative example images written by `download-images`. |
+| `--count` | `20` | Total number of example images written by `download-images`. |
+| `--positive-ratio` | `0.5` | Share of downloaded examples that come from positive source labels. `0.5` with `--count 20` means 10 positive and 10 negative examples. |
+| `--positive-count` / `--negative-count` | not set | Explicit class counts for `download-images` if you do not want to use `--count` and `--positive-ratio`. |
 | `--epochs` | `8` | Number of full passes over the training data. `8` means the model sees the prepared training set eight times. |
 | `--batch-size` | `64` | Number of image/mask pairs processed in one training step. Use `16` or `32` if the machine runs out of memory. |
 | `--image-size` | `128` | Training crop size. `128` means each crop is resized to 128 x 128 pixels. |
@@ -162,7 +163,7 @@ the original files in `--input-dir`.
 If you need a ready-made input folder first, run:
 
 ```bash
-uv run download-images --positive-count 10 --negative-count 10 --output-dir data/input/crossmask-images
+uv run download-images --count 20 --positive-ratio 0.5 --output-dir data/input/crossmask-images
 ```
 
 Then classify those images:
