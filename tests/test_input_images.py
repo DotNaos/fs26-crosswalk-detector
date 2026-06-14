@@ -18,7 +18,7 @@ def test_download_input_images_writes_flat_input_folder(tmp_path: Path, monkeypa
     monkeypatch.setattr(input_images, "crop_tile", lambda _image, _scene, _tile: Image.new("RGB", (32, 32), (200, 200, 200)))
 
     output_dir = tmp_path / "inputs"
-    summary = input_images.download_input_images(tmp_path / "dataset", output_dir, positive_count=1, negative_count=1)
+    summary = input_images.download_input_images(tmp_path / "dataset", output_dir, positive_count=1, negative_count=1, show_progress=False)
 
     assert summary["total"] == 2
     assert summary["positive"] == 1

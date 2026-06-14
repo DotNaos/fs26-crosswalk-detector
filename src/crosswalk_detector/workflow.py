@@ -46,12 +46,14 @@ def dataset_main() -> int:
 def download_images_main() -> int:
     args = _download_images_parser().parse_args()
     _require_default_profile(args.profile)
+    _stage("Checking project assets...", enabled=not args.no_progress)
     _ensure_project_assets(skip_model=True)
 
     from .input_images import download_input_images
 
     output_dir = _resolve(args.output_dir)
     positive_count, negative_count = _image_counts(args.count, args.positive_ratio, args.positive_count, args.negative_count)
+    _stage(f"Preparing {positive_count + negative_count} input image(s): {output_dir}", enabled=not args.no_progress)
     summary = download_input_images(
         _resolve(args.dataset),
         output_dir,
@@ -62,6 +64,7 @@ def download_images_main() -> int:
         min_confidence=args.min_confidence,
         min_mask_coverage=args.min_mask_coverage,
         overwrite=args.overwrite,
+        show_progress=not args.no_progress,
     )
     print("Input images ready")
     print(f"Images: {summary['total']}")
@@ -124,17 +127,20 @@ def test_main() -> int:
     _require_default_profile(args.profile)
     model_root = _resolve(args.model_root)
     if _uses_default_model_root(model_root) and not _model_files_exist(model_root):
+        _stage("Checking project assets...", enabled=not args.no_progress)
         _ensure_project_assets(skip_model=False)
     if args.input_dir:
         from .crossmask_inference import run_crossmask_image_directory
 
         output_dir = _resolve(args.output_dir)
+        _stage(f"Testing image directory: {_resolve(args.input_dir)}", enabled=not args.no_progress)
         summary = run_crossmask_image_directory(
             _resolve(args.input_dir),
             output_dir,
             model_root,
             threshold=args.positive_threshold,
             include_overlays=not args.no_overlays,
+            show_progress=not args.no_progress,
         )
         print("CrossMaskNet directory test complete")
         print(f"Input images: {summary['total']}")
@@ -235,6 +241,7 @@ def _download_images_parser(add_help: bool = True) -> argparse.ArgumentParser:
     parser.add_argument("--min-mask-coverage", type=float, default=0.01, help="Minimum source mask coverage for positive examples.")
     parser.add_argument("--seed", type=int, default=7, help="Repeatable sampling seed.")
     parser.add_argument("--overwrite", action="store_true", help="Remove existing image files in the output folder first.")
+    parser.add_argument("--no-progress", action="store_true", help="Disable live progress output.")
     return parser
 
 
@@ -253,6 +260,7 @@ def _test_parser(add_help: bool = True) -> argparse.ArgumentParser:
         help="Minimum mask coverage for positive. Images below this value are negative.",
     )
     parser.add_argument("--no-overlays", action="store_true", help="Do not write positive overlay images.")
+    parser.add_argument("--no-progress", action="store_true", help="Disable live progress output.")
     return parser
 
 

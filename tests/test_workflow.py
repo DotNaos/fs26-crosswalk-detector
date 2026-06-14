@@ -51,3 +51,21 @@ def test_train_can_disable_time_limit_and_prefetch_raw_cache() -> None:
 
     assert args.max_train_seconds == 0
     assert args.skip_raw_cache is False
+
+
+def test_test_progress_is_enabled_by_default() -> None:
+    args = workflow._test_parser().parse_args([])
+
+    assert args.no_progress is False
+
+
+def test_test_progress_can_be_disabled() -> None:
+    args = workflow._test_parser().parse_args(["--no-progress"])
+
+    assert args.no_progress is True
+
+
+def test_download_images_progress_can_be_disabled() -> None:
+    args = workflow._download_images_parser().parse_args(["--no-progress"])
+
+    assert args.no_progress is True

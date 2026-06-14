@@ -11,6 +11,8 @@ from typing import Any
 
 import numpy as np
 from PIL import Image
+from rich.console import Console
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 import torch
 from torchvision import transforms
 
@@ -90,7 +92,9 @@ def run_crossmask_image_directory(
     *,
     threshold: float = 0.005,
     include_overlays: bool = True,
+    show_progress: bool = True,
 ) -> dict[str, Any]:
+    _progress_line(f"Loading model: {model_root}", enabled=show_progress)
     metrics = json.loads((model_root / "metrics.json").read_text(encoding="utf8"))
     device = _device()
     model = _load_model(metrics, model_root, device)
@@ -104,30 +108,45 @@ def run_crossmask_image_directory(
         directory.mkdir(parents=True, exist_ok=True)
 
     rows = []
-    for image_path in _iter_image_paths(input_dir):
-        image = Image.open(image_path).convert("RGB")
-        probability = _predict_probability(model, image, image_size, device, road_channel=road_channel)
-        mask = probability >= 0.5
-        mask_coverage = float(mask.mean())
-        mask_score = float(probability.mean())
-        decision = "positive" if mask_coverage >= threshold else "negative"
+    image_paths = _iter_image_paths(input_dir)
+    _progress_line(f"Classifying images: starting {len(image_paths)} image(s)", enabled=show_progress)
+    progress = _progress() if show_progress else None
+    progress_context = progress if progress is not None else _NoProgress()
+    with progress_context:
+        task = progress.add_task("Classifying images", total=len(image_paths)) if progress is not None else None
+        for index, image_path in enumerate(image_paths, start=1):
+            image = Image.open(image_path).convert("RGB")
+            probability = _predict_probability(model, image, image_size, device, road_channel=road_channel)
+            mask = probability >= 0.5
+            mask_coverage = float(mask.mean())
+            mask_score = float(probability.mean())
+            decision = "positive" if mask_coverage >= threshold else "negative"
 
-        target_dir = positive_dir if decision == "positive" else negative_dir
-        copied_path = _copy_unique(image_path, target_dir / image_path.name)
-        overlay_path = ""
-        if include_overlays and decision == "positive":
-            overlay_path = str(_save_overlay(image, mask, overlay_dir / image_path.name))
+            target_dir = positive_dir if decision == "positive" else negative_dir
+            copied_path = _copy_unique(image_path, target_dir / image_path.name)
+            overlay_path = ""
+            if include_overlays and decision == "positive":
+                overlay_path = str(_save_overlay(image, mask, overlay_dir / image_path.name))
 
-        rows.append(
-            {
-                "input_path": str(image_path),
-                "decision": decision,
-                "mask_coverage": round(mask_coverage, 6),
-                "mask_score": round(mask_score, 6),
-                "output_path": str(copied_path),
-                "overlay_path": overlay_path,
-            }
-        )
+            rows.append(
+                {
+                    "input_path": str(image_path),
+                    "decision": decision,
+                    "mask_coverage": round(mask_coverage, 6),
+                    "mask_score": round(mask_score, 6),
+                    "output_path": str(copied_path),
+                    "overlay_path": overlay_path,
+                }
+            )
+            if progress is not None and task is not None:
+                progress.update(task, advance=1)
+                progress.refresh()
+            if _should_emit_progress(index, len(image_paths)):
+                _progress_line(
+                    f"Classifying images: {index}/{len(image_paths)} "
+                    f"({decision}, mask_coverage={mask_coverage:.6f})",
+                    enabled=show_progress,
+                )
 
     summary = {
         "model": "CrossMaskNet v4",
@@ -201,6 +220,42 @@ def _iter_image_paths(input_dir: Path) -> list[Path]:
     if not input_dir.is_dir():
         raise NotADirectoryError(f"Input path is not a directory: {input_dir}")
     return sorted(path for path in input_dir.rglob("*") if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS)
+
+
+class _NoProgress:
+    def __enter__(self) -> "_NoProgress":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+
+def _progress() -> Progress:
+    return Progress(
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+        console=Console(force_terminal=True),
+        refresh_per_second=20,
+        redirect_stdout=False,
+        redirect_stderr=False,
+    )
+
+
+def _progress_line(message: str, *, enabled: bool) -> None:
+    if not enabled:
+        return
+    console = Console(force_terminal=True)
+    console.print(f"[cyan]{message}[/cyan]")
+    console.file.flush()
+
+
+def _should_emit_progress(completed: int, total: int) -> bool:
+    if completed <= 1 or completed >= total:
+        return True
+    return completed % max(1, total // 10) == 0
 
 
 def _copy_unique(source: Path, destination: Path) -> Path:

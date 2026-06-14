@@ -86,6 +86,13 @@ For a larger run, increase the training options:
 uv run train --positive-limit 2500 --epochs 8 --batch-size 64 --base-channels 24 --num-workers 2 --max-train-seconds 0 --prefetch-raw-cache
 ```
 
+To test more input images, download a larger input folder and point `test` at it:
+
+```bash
+uv run download-images --count 200 --positive-ratio 0.5 --output-dir data/input/crossmask-images-200
+uv run test --input-dir data/input/crossmask-images-200 --output-dir data/predictions/release-check-200 --positive-threshold 0.005
+```
+
 The normal workflow commands are:
 
 | Command | What it does |
@@ -131,7 +138,7 @@ All options are optional. If you omit them, the commands use these defaults:
 | `--road-channel` | off | Adds a road-context input channel during training. |
 | `--skip-raw-cache` | on for `train`; off for `dataset` | Skips the full scene prefetch and downloads only scenes needed while building the export. |
 | `--prefetch-raw-cache` | off | For `train`, downloads the raw scene cache before building the export. This is slower but useful for larger runs. |
-| `--no-progress` | off | Disables progress bars during training. |
+| `--no-progress` | off | Disables live progress output during `download-images`, `train`, or `test --input-dir`. |
 | `--rebuild-export` | off | Recreates the prepared dataset export even if it already exists. |
 | `--seed` | `7` | Keeps the train/test split and sampling repeatable. |
 
