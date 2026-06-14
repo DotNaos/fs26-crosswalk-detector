@@ -86,7 +86,7 @@ uv run train --skip-raw-cache --positive-limit 20 --negative-ratio 1 \
   --model-output /tmp/crosswalk-model-smoke \
   --rebuild-export
 uv run test --model-root models/crossmask/sam3-500k-road-channel-v4
-uv run test --input-dir path/to/images --output-dir data/predictions/my-run
+uv run test --input-dir path/to/images --output-dir data/predictions/my-run --threshold 0.005
 ```
 
 The workflow has three commands:
@@ -112,7 +112,7 @@ All options are optional. If you omit them, the commands use these defaults:
 | `--model-root` | `models/crossmask/sam3-500k-road-channel-v4` | Where `test` reads model checkpoints and metrics. |
 | `--input-dir` | not set | Folder of new images for `test` to classify. Supports common image files such as JPG and PNG. |
 | `--output-dir` | `data/predictions/crossmask-test` | Where `test --input-dir` writes classified images, overlays, and summary files. |
-| `--threshold` | `0.005` | Mask coverage required for `test --input-dir` to classify an image as positive. |
+| `--threshold` | `0.005` | Decision threshold for `test --input-dir`. Lower values put more images in `positive/`; higher values put more images in `negative/`. |
 | `--no-overlays` | off | Skips writing overlay images for positive predictions. |
 | `--epochs` | `8` | Number of full passes over the training data. `8` means the model sees the prepared training set eight times. |
 | `--batch-size` | `64` | Number of image/mask pairs processed in one training step. Use `16` or `32` if the machine runs out of memory. |
@@ -145,7 +145,7 @@ stored held-out test metrics for the default model.
 To classify new image files, put them in one folder and run:
 
 ```bash
-uv run test --input-dir path/to/images --output-dir data/predictions/my-run
+uv run test --input-dir path/to/images --output-dir data/predictions/my-run --threshold 0.005
 ```
 
 This writes:

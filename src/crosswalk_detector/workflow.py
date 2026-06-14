@@ -179,12 +179,12 @@ def _train_parser(add_help: bool = True) -> argparse.ArgumentParser:
 
 def _test_parser(add_help: bool = True) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="test", add_help=add_help)
-    parser.add_argument("--profile", default="default")
-    parser.add_argument("--model-root", type=Path, default=DEFAULT_MODEL)
-    parser.add_argument("--input-dir", type=Path, default=None)
-    parser.add_argument("--output-dir", type=Path, default=Path("data/predictions/crossmask-test"))
-    parser.add_argument("--threshold", type=float, default=0.005)
-    parser.add_argument("--no-overlays", action="store_true")
+    parser.add_argument("--profile", default="default", help="Prepared project configuration.")
+    parser.add_argument("--model-root", type=Path, default=DEFAULT_MODEL, help="Model checkpoint and metrics directory.")
+    parser.add_argument("--input-dir", type=Path, default=None, help="Folder of new images to classify.")
+    parser.add_argument("--output-dir", type=Path, default=Path("data/predictions/crossmask-test"), help="Where classified outputs are written.")
+    parser.add_argument("--threshold", type=float, default=0.005, help="Decision threshold for classifying an image as positive.")
+    parser.add_argument("--no-overlays", action="store_true", help="Do not write positive overlay images.")
     return parser
 
 
