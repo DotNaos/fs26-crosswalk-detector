@@ -15,6 +15,7 @@ from typing import Any
 
 import numpy as np
 from PIL import Image
+from rich.console import Console
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 import torch
 from torch import nn
@@ -282,7 +283,10 @@ def train_crossmask(
             model.train()
             total_loss = 0.0
             seen = 0
-            batch_task = progress.add_task(f"Epoch {epoch}/{epochs}", total=len(train_loader)) if progress is not None else None
+            total_batches = len(train_loader)
+            batch_task = progress.add_task(f"Epoch {epoch}/{epochs}", total=total_batches) if progress is not None else None
+            _progress_line(f"Epoch {epoch}/{epochs}: starting {total_batches} batch(es)", enabled=show_progress)
+            completed_batches = 0
             for images, masks, _tile_ids, _labels in train_loader:
                 images = images.to(device)
                 masks = masks.to(device)
@@ -294,14 +298,23 @@ def train_crossmask(
                 optimizer.step()
                 total_loss += float(loss.item()) * images.size(0)
                 seen += images.size(0)
+                completed_batches += 1
                 if progress is not None and batch_task is not None:
                     progress.update(batch_task, advance=1)
+                    progress.refresh()
+                if _should_emit_progress(completed_batches, total_batches):
+                    _progress_line(
+                        f"Epoch {epoch}/{epochs}: batch {completed_batches}/{total_batches}, "
+                        f"loss={float(loss.item()):.4f}",
+                        enabled=show_progress,
+                    )
                 if _time_budget_exhausted(started_at, max_train_seconds) and seen > 0:
                     stopped_early = True
                     break
             scheduler.step()
             if progress is not None and batch_task is not None:
-                progress.remove_task(batch_task)
+                progress.update(batch_task, description=f"Epoch {epoch}/{epochs} complete")
+                progress.refresh()
 
             val_metrics = evaluate_crossmask(model, val_loader, device)
             checkpoint_path = model_root / f"checkpoint_epoch_{epoch:03d}.pt"
@@ -320,6 +333,7 @@ def train_crossmask(
             print(json.dumps(epoch_row), flush=True)
             if progress is not None and epoch_task is not None:
                 progress.update(epoch_task, advance=1)
+                progress.refresh()
             if stopped_early:
                 break
 
@@ -547,18 +561,43 @@ def _progress() -> Progress:
         MofNCompleteColumn(),
         TimeElapsedColumn(),
         TimeRemainingColumn(),
+        console=Console(force_terminal=True),
+        refresh_per_second=20,
+        redirect_stdout=False,
+        redirect_stderr=False,
     )
+
+
+def _progress_line(message: str, *, enabled: bool) -> None:
+    if not enabled:
+        return
+    console = Console(force_terminal=True)
+    console.print(f"[cyan]{message}[/cyan]")
+    console.file.flush()
+
+
+def _should_emit_progress(completed: int, total: int) -> bool:
+    if completed <= 1 or completed >= total:
+        return True
+    return completed % max(1, total // 10) == 0
 
 
 def _iter_with_progress(items: list[MaskCandidate], description: str, *, enabled: bool) -> Any:
     if not enabled:
         yield from items
         return
+    total = len(items)
+    _progress_line(f"{description}: starting {total} item(s)", enabled=enabled)
     with _progress() as progress:
-        task = progress.add_task(description, total=len(items))
+        task = progress.add_task(description, total=total)
+        completed = 0
         for item in items:
             yield item
+            completed += 1
             progress.update(task, advance=1)
+            progress.refresh()
+            if _should_emit_progress(completed, total):
+                _progress_line(f"{description}: {completed}/{total}", enabled=enabled)
 
 
 def _time_budget_exhausted(started_at: float, max_train_seconds: int | None) -> bool:

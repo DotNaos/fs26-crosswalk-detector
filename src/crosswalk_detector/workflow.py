@@ -288,10 +288,13 @@ def _prepare_dataset(
     skip_raw_cache: bool,
     show_progress: bool = True,
 ) -> None:
+    _stage("Checking project assets...", enabled=show_progress)
     _ensure_project_assets(skip_model=True)
     if not skip_raw_cache:
+        _stage("Preparing raw image cache...", enabled=show_progress)
         _prepare_raw_cache(dataset_root, limit_scenes, workers)
     if rebuild_export or not (export_root / "manifest.csv").exists():
+        _stage(f"Preparing training export: {export_root}", enabled=show_progress)
         summary = prepare_crossmask_export(
             dataset_root,
             export_root,
@@ -325,6 +328,11 @@ def _resolve(path: Path) -> Path:
 def _require_default_profile(profile: str) -> None:
     if profile != "default":
         raise ValueError("Only --profile default is defined.")
+
+
+def _stage(message: str, *, enabled: bool = True) -> None:
+    if enabled:
+        print(message, flush=True)
 
 
 def _image_counts(count: int, positive_ratio: float, positive_count: int | None, negative_count: int | None) -> tuple[int, int]:
