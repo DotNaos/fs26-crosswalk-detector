@@ -3,7 +3,7 @@ name = "crosswalk-detector"
 version = "0.1.0"
 description = "Image classification project scaffold for FS26."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = [
   "certifi>=2026.0.0",
   "einops>=0.8.1",
