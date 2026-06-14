@@ -13,9 +13,10 @@ import tomllib
 from typing import Any, Iterable
 
 from .metadata_dataset import resolve_label_votes, resolve_shard_path
+from .raw_imagery import load_cached_scene_image
 from .real_pipeline import scene_bbox
 from .real_config import SceneSpec
-from .scan_backend import SceneRequest, TileRequest, crop_tile, fetch_scene_image
+from .scan_backend import SceneRequest, TileRequest, crop_tile
 
 
 @dataclass(frozen=True)
@@ -261,7 +262,7 @@ def export_training_dataset(dataset_root: Path, output_root: Path, *, limit: int
             if not image_path.exists():
                 image_path.parent.mkdir(parents=True, exist_ok=True)
                 scene = _scene_request(dataset_root, row["scene_id"])
-                scene_image = scene_cache.setdefault(row["scene_id"], fetch_scene_image(scene))
+                scene_image = scene_cache.setdefault(row["scene_id"], load_cached_scene_image(dataset_root, scene))
                 tile = TileRequest(
                     tile_id=row["tile_id"],
                     row=row["row"],

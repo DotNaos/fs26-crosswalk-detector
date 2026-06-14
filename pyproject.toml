@@ -3,7 +3,7 @@ name = "crosswalk-detector"
 version = "0.1.0"
 description = "Image classification project scaffold for FS26."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = [
   "certifi>=2026.0.0",
   "einops>=0.8.1",
@@ -11,16 +11,25 @@ dependencies = [
   "pillow>=11.0,<12.0",
   "psutil>=7.2.0",
   "pycocotools>=2.0.11",
+  "rich>=14.2.0",
   "safetensors>=0.7.0",
-  "sam3 @ git+https://github.com/facebookresearch/sam3.git",
   "torch==2.11.0",
   "torchvision==0.26.0",
   "transformers>=5.4.0",
 ]
 
+[project.optional-dependencies]
+labeling = [
+  "sam3 @ git+https://github.com/facebookresearch/sam3.git",
+]
+
 [project.scripts]
 crosswalk-pipeline = "crosswalk_detector.cli:main"
 crosswalk-scan-server = "crosswalk_detector.scan_server:main"
+dataset = "crosswalk_detector.workflow:dataset_main"
+download-images = "crosswalk_detector.workflow:download_images_main"
+train = "crosswalk_detector.workflow:train_main"
+test = "crosswalk_detector.workflow:test_main"
 
 [dependency-groups]
 dev = [

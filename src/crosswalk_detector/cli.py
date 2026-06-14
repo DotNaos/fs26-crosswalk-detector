@@ -20,6 +20,7 @@ from .pilot import (
 from .real_pipeline import build_real_dataset, write_compact_manifest
 from .scan_batch import load_scan_batch_job, run_scan_batch_job, summarize_scan_batch_result, write_scan_batch_result
 from .metadata_dataset import validate_metadata_dataset
+from .raw_imagery import download_dataset_scenes
 from .sam3_metadata import (
     build_sam3_shard_jobs,
     export_training_dataset,
@@ -238,6 +239,12 @@ def build_parser() -> argparse.ArgumentParser:
     export_training.add_argument("--dataset", type=Path, required=True, help="Metadata dataset root.")
     export_training.add_argument("--output", type=Path, required=True, help="Training export output directory.")
     export_training.add_argument("--limit", type=int, default=None, help="Export only the first N selected rows.")
+
+    raw_scenes = subparsers.add_parser("download-raw-scenes")
+    raw_scenes.add_argument("--dataset", type=Path, required=True, help="Metadata dataset root.")
+    raw_scenes.add_argument("--raw-root", type=Path, default=None, help="Where to cache raw scene imagery.")
+    raw_scenes.add_argument("--limit-scenes", type=int, default=None, help="Only download the first N scenes.")
+    raw_scenes.add_argument("--workers", type=int, default=4, help="Concurrent scene downloads.")
 
     summarize_results = subparsers.add_parser("summarize-sam3-results")
     summarize_results.add_argument("--results", type=Path, required=True, help="Directory containing SAM3 scan result JSON files.")
@@ -527,6 +534,21 @@ def main() -> int:
         summary = export_training_dataset(args.dataset, args.output, limit=args.limit)
         print(f"Exported {summary['exported_count']} image(s) to {args.output}")
         print(f"Labels CSV: {summary['labels_csv']}")
+        return 0
+
+    if args.command == "download-raw-scenes":
+        summary = download_dataset_scenes(
+            args.dataset,
+            raw_root=args.raw_root,
+            limit_scenes=args.limit_scenes,
+            workers=args.workers,
+        )
+        print(
+            f"Raw scenes ready: {summary['scene_count']} scene(s), "
+            f"{summary['downloaded']} downloaded, {summary['cached']} cached, "
+            f"{summary['size_mb']} MB"
+        )
+        print(f"Raw root: {summary['raw_root']}")
         return 0
 
     if args.command == "summarize-sam3-results":

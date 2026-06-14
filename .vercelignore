@@ -1,5 +1,7 @@
 *
 !vercel.json
+!scripts
+!scripts/download_submission_assets.py
 !web
 !web/**
 web/node_modules

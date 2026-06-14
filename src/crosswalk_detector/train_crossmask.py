@@ -4,15 +4,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import csv
+import gzip
 import hashlib
 import json
 from pathlib import Path
 import random
 import shutil
+from time import monotonic
 from typing import Any
 
 import numpy as np
 from PIL import Image
+from rich.console import Console
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -20,7 +24,8 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 
 from .metadata_dataset import resolve_shard_path
-from .scan_backend import SceneRequest, TileRequest, crop_tile, fetch_scene_image
+from .raw_imagery import load_cached_scene_image
+from .scan_backend import SceneRequest, TileRequest, crop_tile, mercator_to_lat_lon
 
 
 @dataclass(frozen=True)
@@ -137,6 +142,7 @@ def prepare_crossmask_export(
     image_size: int = 128,
     seed: int = 7,
     overwrite: bool = False,
+    show_progress: bool = True,
 ) -> dict[str, Any]:
     if output_root.exists() and overwrite:
         shutil.rmtree(output_root)
@@ -175,14 +181,14 @@ def prepare_crossmask_export(
             ],
         )
         writer.writeheader()
-        for item in candidates:
+        for item in _iter_with_progress(candidates, "Preparing training images", enabled=show_progress):
             split = _split_for_id(item.tile_id)
             safe_id = item.image_id.replace(":", "__")
             image_path = image_root / split / item.label / f"{safe_id}.jpg"
             mask_path = mask_root / split / item.label / f"{safe_id}.png"
             if not image_path.exists() or not mask_path.exists():
                 scene = _scene_request(dataset_root, item.scene_id)
-                scene_image = scene_cache.setdefault(item.scene_id, fetch_scene_image(scene))
+                scene_image = scene_cache.setdefault(item.scene_id, load_cached_scene_image(dataset_root, scene))
                 tile = TileRequest(item.tile_id, item.row, item.col, item.bbox_mercator, item.relative_path)
                 image_path.parent.mkdir(parents=True, exist_ok=True)
                 crop_tile(scene_image, scene, tile).resize((image_size, image_size), Image.Resampling.BICUBIC).save(image_path, quality=94)
@@ -239,6 +245,8 @@ def train_crossmask(
     road_channel: bool = False,
     num_workers: int = 2,
     seed: int = 7,
+    max_train_seconds: int | None = None,
+    show_progress: bool = True,
 ) -> dict[str, Any]:
     if input_channels != (4 if road_channel else 3):
         raise ValueError("input_channels must be 4 with --road-channel and 3 without it.")
@@ -260,30 +268,74 @@ def train_crossmask(
     best_state = None
     best_score = -1.0
     pos_weight = _positive_pixel_weight(train_rows)
+    started_at = monotonic()
+    stopped_early = False
 
-    for epoch in range(1, epochs + 1):
-        model.train()
-        total_loss = 0.0
-        seen = 0
-        for images, masks, _tile_ids, _labels in train_loader:
-            images = images.to(device)
-            masks = masks.to(device)
-            optimizer.zero_grad(set_to_none=True)
-            logits = model(images)
-            loss = _segmentation_loss(logits, masks, pos_weight.to(device))
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
-            optimizer.step()
-            total_loss += float(loss.item()) * images.size(0)
-            seen += images.size(0)
-        scheduler.step()
-        val_metrics = evaluate_crossmask(model, val_loader, device)
-        epoch_row = {"epoch": epoch, "train_loss": round(total_loss / max(1, seen), 6), **_round_metrics(val_metrics)}
-        history.append(epoch_row)
-        if val_metrics["positive_dice"] > best_score:
-            best_score = float(val_metrics["positive_dice"])
-            best_state = {key: value.cpu() for key, value in model.state_dict().items()}
-        print(json.dumps(epoch_row), flush=True)
+    progress = _progress() if show_progress else None
+    progress_context = progress if progress is not None else _NoProgress()
+    with progress_context:
+        epoch_task = progress.add_task("Training epochs", total=epochs) if progress is not None else None
+        for epoch in range(1, epochs + 1):
+            if _time_budget_exhausted(started_at, max_train_seconds) and history:
+                stopped_early = True
+                break
+
+            model.train()
+            total_loss = 0.0
+            seen = 0
+            total_batches = len(train_loader)
+            batch_task = progress.add_task(f"Epoch {epoch}/{epochs}", total=total_batches) if progress is not None else None
+            _progress_line(f"Epoch {epoch}/{epochs}: starting {total_batches} batch(es)", enabled=show_progress)
+            completed_batches = 0
+            for images, masks, _tile_ids, _labels in train_loader:
+                images = images.to(device)
+                masks = masks.to(device)
+                optimizer.zero_grad(set_to_none=True)
+                logits = model(images)
+                loss = _segmentation_loss(logits, masks, pos_weight.to(device))
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+                optimizer.step()
+                total_loss += float(loss.item()) * images.size(0)
+                seen += images.size(0)
+                completed_batches += 1
+                if progress is not None and batch_task is not None:
+                    progress.update(batch_task, advance=1)
+                    progress.refresh()
+                if _should_emit_progress(completed_batches, total_batches):
+                    _progress_line(
+                        f"Epoch {epoch}/{epochs}: batch {completed_batches}/{total_batches}, "
+                        f"loss={float(loss.item()):.4f}",
+                        enabled=show_progress,
+                    )
+                if _time_budget_exhausted(started_at, max_train_seconds) and seen > 0:
+                    stopped_early = True
+                    break
+            scheduler.step()
+            if progress is not None and batch_task is not None:
+                progress.update(batch_task, description=f"Epoch {epoch}/{epochs} complete")
+                progress.refresh()
+
+            val_metrics = evaluate_crossmask(model, val_loader, device)
+            checkpoint_path = model_root / f"checkpoint_epoch_{epoch:03d}.pt"
+            torch.save(model.state_dict(), checkpoint_path)
+            torch.save(model.state_dict(), model_root / "crossmasknet_latest.pt")
+            epoch_row = {
+                "epoch": epoch,
+                "train_loss": round(total_loss / max(1, seen), 6),
+                "checkpoint_path": str(checkpoint_path),
+                **_round_metrics(val_metrics),
+            }
+            history.append(epoch_row)
+            if val_metrics["positive_dice"] > best_score:
+                best_score = float(val_metrics["positive_dice"])
+                best_state = {key: value.cpu() for key, value in model.state_dict().items()}
+            print(json.dumps(epoch_row), flush=True)
+            if progress is not None and epoch_task is not None:
+                progress.update(epoch_task, advance=1)
+                progress.refresh()
+            if stopped_early:
+                break
 
     if best_state is not None:
         model.load_state_dict(best_state)
@@ -303,6 +355,8 @@ def train_crossmask(
         "road_channel": road_channel,
         "batch_size": batch_size,
         "learning_rate": learning_rate,
+        "max_train_seconds": max_train_seconds,
+        "stopped_early": stopped_early,
         "counts": _count_rows(rows),
         "history": history,
         "test": _round_metrics(test_metrics),
@@ -372,7 +426,7 @@ def _load_candidates(dataset_root: Path, *, min_confidence: float, min_mask_cove
             resolved = row.get("resolved_label", {})
             label = str(resolved.get("decision", ""))
             confidence = float(resolved.get("confidence") or 0.0)
-            candidate = _candidate_from_row(row, label, confidence)
+            candidate = _candidate_from_row(dataset_root, row, label, confidence)
             if candidate is None:
                 continue
             if label == "crosswalk":
@@ -383,11 +437,11 @@ def _load_candidates(dataset_root: Path, *, min_confidence: float, min_mask_cove
     return positives, negatives
 
 
-def _candidate_from_row(row: dict[str, Any], label: str, confidence: float) -> MaskCandidate | None:
+def _candidate_from_row(dataset_root: Path, row: dict[str, Any], label: str, confidence: float) -> MaskCandidate | None:
     mask_path = ""
     coverage = 0.0
     if label == "crosswalk":
-        mask_path = _row_mask_path(row)
+        mask_path = _row_mask_path(dataset_root, row)
         if not mask_path or not Path(mask_path).exists():
             return None
         coverage = _mask_coverage(Path(mask_path))
@@ -407,7 +461,7 @@ def _candidate_from_row(row: dict[str, Any], label: str, confidence: float) -> M
     )
 
 
-def _row_mask_path(row: dict[str, Any]) -> str:
+def _row_mask_path(dataset_root: Path, row: dict[str, Any]) -> str:
     resolved_source = row.get("resolved_label", {}).get("source_id")
     candidates = []
     for label in row.get("labels", []):
@@ -416,11 +470,25 @@ def _row_mask_path(row: dict[str, Any]) -> str:
             continue
         artifact = metadata.get("mask_artifact")
         if isinstance(artifact, dict) and artifact.get("path"):
-            candidates.append((label.get("source", {}).get("source_id"), str(artifact["path"])))
+            path = _resolve_mask_artifact_path(dataset_root, artifact)
+            if path:
+                candidates.append((label.get("source", {}).get("source_id"), path))
     for source_id, path in candidates:
         if source_id == resolved_source:
             return path
     return candidates[-1][1] if candidates else ""
+
+
+def _resolve_mask_artifact_path(dataset_root: Path, artifact: dict[str, Any]) -> str:
+    static_path = artifact.get("static_path")
+    if static_path:
+        candidate = dataset_root / str(static_path)
+        if candidate.exists():
+            return str(candidate)
+    path = artifact.get("path")
+    if path and Path(str(path)).exists():
+        return str(path)
+    return ""
 
 
 def _mask_coverage(path: Path) -> float:
@@ -430,8 +498,32 @@ def _mask_coverage(path: Path) -> float:
 
 
 def _scene_request(dataset_root: Path, scene_id: str) -> SceneRequest:
-    scene = _read_json(dataset_root / "scenes" / scene_id / "scene.json")
-    return SceneRequest(scene_id=scene_id, latitude=float(scene["latitude"]), longitude=float(scene["longitude"]), size_m=int(scene["size_m"]), image_px=int(scene["image_px"]), tile_size_m=int(scene["tile_size_m"]))
+    scene_path = dataset_root / "scenes" / scene_id / "scene.json"
+    if scene_path.exists():
+        scene = _read_json(scene_path)
+        return SceneRequest(scene_id=scene_id, latitude=float(scene["latitude"]), longitude=float(scene["longitude"]), size_m=int(scene["size_m"]), image_px=int(scene["image_px"]), tile_size_m=int(scene["tile_size_m"]))
+
+    index = _read_json(dataset_root / "dataset.json")
+    scene = next((entry for entry in index.get("scenes", []) if entry.get("scene_id") == scene_id), None)
+    if scene is None:
+        scene = next((entry for entry in index.get("shards", []) if entry.get("scene_id") == scene_id), None)
+    if scene is None:
+        raise FileNotFoundError(f"No scene metadata found for {scene_id} in {dataset_root}")
+    bbox = [float(value) for value in scene["bbox_mercator"]]
+    center_x = (bbox[0] + bbox[2]) / 2.0
+    center_y = (bbox[1] + bbox[3]) / 2.0
+    latitude, longitude = mercator_to_lat_lon(center_x, center_y)
+    size_m = int(round(max(bbox[2] - bbox[0], bbox[3] - bbox[1])))
+    image_px = int(scene.get("image_px", 2048))
+    tile_size_m = int(scene.get("tile_size_m", 25))
+    return SceneRequest(
+        scene_id=scene_id,
+        latitude=latitude,
+        longitude=longitude,
+        size_m=size_m,
+        image_px=image_px,
+        tile_size_m=tile_size_m,
+    )
 
 
 def _load_export_rows(export_root: Path) -> list[ExportSample]:
@@ -452,6 +544,64 @@ def _loader(rows: list[ExportSample], image_size: int, train: bool, batch_size: 
         pin_memory=torch.cuda.is_available(),
         persistent_workers=num_workers > 0,
     )
+
+
+class _NoProgress:
+    def __enter__(self) -> "_NoProgress":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+
+def _progress() -> Progress:
+    return Progress(
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+        console=Console(force_terminal=True),
+        refresh_per_second=20,
+        redirect_stdout=False,
+        redirect_stderr=False,
+    )
+
+
+def _progress_line(message: str, *, enabled: bool) -> None:
+    if not enabled:
+        return
+    console = Console(force_terminal=True)
+    console.print(f"[cyan]{message}[/cyan]")
+    console.file.flush()
+
+
+def _should_emit_progress(completed: int, total: int) -> bool:
+    if completed <= 1 or completed >= total:
+        return True
+    return completed % max(1, total // 10) == 0
+
+
+def _iter_with_progress(items: list[MaskCandidate], description: str, *, enabled: bool) -> Any:
+    if not enabled:
+        yield from items
+        return
+    total = len(items)
+    _progress_line(f"{description}: starting {total} item(s)", enabled=enabled)
+    with _progress() as progress:
+        task = progress.add_task(description, total=total)
+        completed = 0
+        for item in items:
+            yield item
+            completed += 1
+            progress.update(task, advance=1)
+            progress.refresh()
+            if _should_emit_progress(completed, total):
+                _progress_line(f"{description}: {completed}/{total}", enabled=enabled)
+
+
+def _time_budget_exhausted(started_at: float, max_train_seconds: int | None) -> bool:
+    return max_train_seconds is not None and max_train_seconds > 0 and monotonic() - started_at >= max_train_seconds
 
 
 def _conv_block(in_channels: int, out_channels: int) -> nn.Sequential:
@@ -542,4 +692,7 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if path.suffix == ".gz":
+        with gzip.open(path, "rt", encoding="utf8") as handle:
+            return [json.loads(line) for line in handle if line.strip()]
     return [json.loads(line) for line in path.read_text(encoding="utf8").splitlines() if line.strip()]
