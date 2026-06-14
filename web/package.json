@@ -4,8 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "bun run dev.ts",
-    "dev:client": "portless --name crosswalk-review sh -c 'bunx vite --host \"$HOST\" --port \"$PORT\"'",
-    "dev:client:direct": "bunx vite",
+    "dev:client": "CROSSWALK_REVIEW_VIA_PORTLESS=1 portless --name crosswalk-review --force sh -c 'bunx vite --host \"$HOST\" --port \"$PORT\"'",
+    "dev:client:direct": "echo 'Direct Vite dev is disabled. Use bun run dev:client or bun run dev.' && exit 1",
     "dev:url": "portless get crosswalk-review",
     "dev:tailnet:url": "bun run tailnet-url.ts",
     "cli:remote": "bun run src/remote-cli.ts",

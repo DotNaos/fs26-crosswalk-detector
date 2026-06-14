@@ -46,8 +46,20 @@ SAM31_PROMPTS = tuple(
     ).split("|")
     if prompt.strip()
 )
+SAM31_NEGATIVE_PROMPTS = tuple(
+    prompt.strip()
+    for prompt in os.getenv(
+        "CROSSWALK_SAM31_NEGATIVE_PROMPTS",
+        "",
+    ).split("|")
+    if prompt.strip()
+)
 SAM31_CONFIDENCE_THRESHOLD = float(os.getenv("CROSSWALK_SAM31_CONFIDENCE", "0.18"))
 SAM31_TILE_THRESHOLD = float(os.getenv("CROSSWALK_SAM31_TILE_THRESHOLD", "0.18"))
+SAM31_NEGATIVE_TILE_THRESHOLD = float(os.getenv("CROSSWALK_SAM31_NEGATIVE_TILE_THRESHOLD", "0.18"))
+SAM31_EDGE_CENTER_THRESHOLD = float(os.getenv("CROSSWALK_SAM31_EDGE_CENTER_THRESHOLD", "0.45"))
+SAM31_PARKING_GRID_MAX_SCORE = float(os.getenv("CROSSWALK_SAM31_PARKING_GRID_MAX_SCORE", "0.60"))
+SAM31_SUPPRESSION_BOX_IOU = float(os.getenv("CROSSWALK_SAM31_SUPPRESSION_BOX_IOU", "0.20"))
 SAM31_MASK_COVERAGE_SCALE = float(os.getenv("CROSSWALK_SAM31_MASK_COVERAGE_SCALE", "120"))
 SAM31_BOX_OVERLAP_SCALE = float(os.getenv("CROSSWALK_SAM31_BOX_OVERLAP_SCALE", "10"))
 
@@ -88,6 +100,7 @@ class Sam31Detection:
     score: float
     box: tuple[float, float, float, float]
     mask: np.ndarray
+    polarity: str = "positive"
 
 
 @dataclass(frozen=True)
@@ -99,6 +112,7 @@ class Sam31TileMetrics:
     box_overlap: float
     prompt: str
     detection_count: int
+    mask: np.ndarray | None = None
 
 
 class ScanBackend(Protocol):
@@ -260,8 +274,12 @@ class Sam31CrosswalkScanner:
     def __init__(self) -> None:
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.prompts = SAM31_PROMPTS
+        self.negative_prompts = SAM31_NEGATIVE_PROMPTS
         self.confidence_threshold = SAM31_CONFIDENCE_THRESHOLD
         self.tile_threshold = SAM31_TILE_THRESHOLD
+        self.negative_tile_threshold = SAM31_NEGATIVE_TILE_THRESHOLD
+        self.edge_center_threshold = SAM31_EDGE_CENTER_THRESHOLD
+        self.parking_grid_max_score = SAM31_PARKING_GRID_MAX_SCORE
         if self.device != "cuda":
             raise RuntimeError("SAM3.1 scanning requires CUDA on the remote scan host.")
         from sam3.model.sam3_image_processor import Sam3Processor
@@ -291,6 +309,14 @@ class Sam31CrosswalkScanner:
         state = self.processor.set_image(scene_image)
         detections: list[Sam31Detection] = []
         for prompt in self.prompts:
+            detections.extend(self._detect_prompt(state, prompt, "positive"))
+        for prompt in self.negative_prompts:
+            detections.extend(self._detect_prompt(state, prompt, "negative"))
+        return detections
+
+    def _detect_prompt(self, state: dict[str, Any], prompt: str, polarity: str) -> list[Sam31Detection]:
+        detections: list[Sam31Detection] = []
+        try:
             if hasattr(self.processor, "reset_all_prompts"):
                 self.processor.reset_all_prompts(state)
             prompt_state = self.processor.set_text_prompt(prompt, state)
@@ -298,7 +324,7 @@ class Sam31CrosswalkScanner:
             masks = prompt_state.get("masks")
             scores = prompt_state.get("scores")
             if boxes is None or masks is None or scores is None:
-                continue
+                return detections
             boxes_np = boxes.detach().float().cpu().numpy()
             masks_np = masks.detach().cpu().numpy()
             scores_np = scores.detach().float().cpu().numpy()
@@ -310,9 +336,13 @@ class Sam31CrosswalkScanner:
                         score=float(score),
                         box=tuple(float(value) for value in box),
                         mask=mask_2d,
+                        polarity=polarity,
                     )
                 )
-        return detections
+            return detections
+        finally:
+            if self.device == "cuda":
+                torch.cuda.empty_cache()
 
     def score_tiles(self, scene: SceneRequest, tiles: list[TileRequest], detections: list[Sam31Detection]) -> list[Sam31TileMetrics]:
         return [self.score_tile(scene, tile, detections) for tile in tiles]
@@ -321,18 +351,34 @@ class Sam31CrosswalkScanner:
         tile_bounds = _tile_pixel_bounds(scene, tile.bbox_mercator)
         best_score = best_peak = best_coverage = best_box_overlap = 0.0
         best_prompt = "sam3.1"
-        for detection in detections:
+        best_mask: np.ndarray | None = None
+        suppressed_prompt = None
+        positive_detections = [detection for detection in detections if detection.polarity == "positive"]
+        negative_detections = [detection for detection in detections if detection.polarity == "negative"]
+        for detection in positive_detections:
             coverage = _mask_tile_coverage(detection.mask, tile_bounds)
             box_overlap = _intersection_ratio(detection.box, tile_bounds)
-            peak = max(coverage * SAM31_MASK_COVERAGE_SCALE, box_overlap * SAM31_BOX_OVERLAP_SCALE)
+            peak = _sam31_tile_peak(coverage, box_overlap)
             score = detection.score * min(1.0, peak)
+            if score < self.edge_center_threshold and not _center_inside(detection.box, tile_bounds):
+                suppressed_prompt = "edge-overlap"
+                continue
+            suppressor = self._suppression_prompt(detection, tile_bounds, negative_detections)
+            if suppressor is not None:
+                suppressed_prompt = suppressor
+                continue
             if score > best_score:
                 best_score = score
                 best_peak = detection.score
                 best_coverage = coverage
                 best_box_overlap = box_overlap
                 best_prompt = detection.prompt
+                best_mask = _crop_mask_to_tile(detection.mask, tile_bounds)
         label = "crosswalk" if best_score >= self.tile_threshold else "no_crosswalk"
+        if best_score == 0.0 and suppressed_prompt is not None:
+            best_prompt = f"suppressed:{suppressed_prompt}"
+        if label != "crosswalk":
+            best_mask = None
         return Sam31TileMetrics(
             label=label,
             score=best_score,
@@ -340,8 +386,33 @@ class Sam31CrosswalkScanner:
             coverage=best_coverage,
             box_overlap=best_box_overlap,
             prompt=best_prompt,
-            detection_count=len(detections),
+            detection_count=len(positive_detections),
+            mask=best_mask,
         )
+
+    def image_rejection_reason(self, tile_image: Image.Image, metrics: Sam31TileMetrics) -> str | None:
+        if metrics.label != "crosswalk" or metrics.score >= self.parking_grid_max_score:
+            return None
+        if _looks_like_yellow_parking_grid(tile_image):
+            return "yellow-parking-grid"
+        return None
+
+    def _suppression_prompt(
+        self,
+        candidate: Sam31Detection,
+        tile_bounds: tuple[float, float, float, float],
+        negative_detections: list[Sam31Detection],
+    ) -> str | None:
+        for detection in negative_detections:
+            coverage = _mask_tile_coverage(detection.mask, tile_bounds)
+            box_overlap = _intersection_ratio(detection.box, tile_bounds)
+            peak = _sam31_tile_peak(coverage, box_overlap)
+            score = detection.score * min(1.0, peak)
+            if score < self.negative_tile_threshold:
+                continue
+            if _boxes_match(candidate.box, detection.box):
+                return detection.prompt
+        return None
 
 
 class HybridCrosswalkScanner:
@@ -439,6 +510,31 @@ def _center_inside(box: tuple[float, float, float, float], tile_bounds: tuple[fl
     return tile_bounds[0] <= cx <= tile_bounds[2] and tile_bounds[1] <= cy <= tile_bounds[3]
 
 
+def _box_iou(first: tuple[float, float, float, float], second: tuple[float, float, float, float]) -> float:
+    left = max(first[0], second[0])
+    top = max(first[1], second[1])
+    right = min(first[2], second[2])
+    bottom = min(first[3], second[3])
+    if right <= left or bottom <= top:
+        return 0.0
+    overlap = (right - left) * (bottom - top)
+    first_area = max(1.0, (first[2] - first[0]) * (first[3] - first[1]))
+    second_area = max(1.0, (second[2] - second[0]) * (second[3] - second[1]))
+    return overlap / (first_area + second_area - overlap)
+
+
+def _boxes_match(candidate: tuple[float, float, float, float], suppressor: tuple[float, float, float, float]) -> bool:
+    return (
+        _box_iou(candidate, suppressor) >= SAM31_SUPPRESSION_BOX_IOU
+        or _center_inside(candidate, suppressor)
+        or _center_inside(suppressor, candidate)
+    )
+
+
+def _sam31_tile_peak(coverage: float, box_overlap: float) -> float:
+    return max(coverage * SAM31_MASK_COVERAGE_SCALE, box_overlap * SAM31_BOX_OVERLAP_SCALE)
+
+
 def _intersection_ratio(box: tuple[float, float, float, float], tile_bounds: tuple[float, float, float, float]) -> float:
     left = max(box[0], tile_bounds[0])
     top = max(box[1], tile_bounds[1])
@@ -452,15 +548,63 @@ def _intersection_ratio(box: tuple[float, float, float, float], tile_bounds: tup
 
 
 def _mask_tile_coverage(mask: np.ndarray, tile_bounds: tuple[float, float, float, float]) -> float:
+    tile_mask = _crop_mask_to_tile(mask, tile_bounds)
+    return float(tile_mask.mean()) if tile_mask is not None and tile_mask.size else 0.0
+
+
+def _crop_mask_to_tile(mask: np.ndarray, tile_bounds: tuple[float, float, float, float]) -> np.ndarray | None:
     height, width = mask.shape
     left = max(0, min(width, int(math.floor(tile_bounds[0]))))
     top = max(0, min(height, int(math.floor(tile_bounds[1]))))
     right = max(0, min(width, int(math.ceil(tile_bounds[2]))))
     bottom = max(0, min(height, int(math.ceil(tile_bounds[3]))))
     if right <= left or bottom <= top:
-        return 0.0
-    tile_mask = mask[top:bottom, left:right]
-    return float(tile_mask.mean()) if tile_mask.size else 0.0
+        return None
+    return mask[top:bottom, left:right].astype(bool)
+
+
+def _looks_like_yellow_parking_grid(image: Image.Image) -> bool:
+    pixels = np.asarray(image.convert("RGB")).astype(np.int16)
+    red = pixels[:, :, 0]
+    green = pixels[:, :, 1]
+    blue = pixels[:, :, 2]
+    yellow = (red > 105) & (green > 95) & (blue < 115) & ((red - blue) > 35) & ((green - blue) > 25) & (np.abs(red - green) < 70)
+    yellow_ratio = float(yellow.mean())
+    if yellow_ratio < 0.12:
+        return False
+    components = _connected_component_boxes(yellow)
+    large_components = [component for component in components if component[0] >= 8]
+    largest_component = max((component[0] for component in components), default=0)
+    return largest_component >= 500 or (len(large_components) >= 8 and largest_component >= 100)
+
+
+def _connected_component_boxes(mask: np.ndarray) -> list[tuple[int, int, int]]:
+    height, width = mask.shape
+    seen = np.zeros_like(mask, dtype=bool)
+    components: list[tuple[int, int, int]] = []
+    ys, xs = np.nonzero(mask)
+    for start_y, start_x in zip(ys.tolist(), xs.tolist()):
+        if seen[start_y, start_x]:
+            continue
+        stack = [(start_y, start_x)]
+        seen[start_y, start_x] = True
+        count = 0
+        min_x = max_x = start_x
+        min_y = max_y = start_y
+        while stack:
+            y, x = stack.pop()
+            count += 1
+            min_x = min(min_x, x)
+            max_x = max(max_x, x)
+            min_y = min(min_y, y)
+            max_y = max(max_y, y)
+            for next_y in range(max(0, y - 1), min(height, y + 2)):
+                for next_x in range(max(0, x - 1), min(width, x + 2)):
+                    if mask[next_y, next_x] and not seen[next_y, next_x]:
+                        seen[next_y, next_x] = True
+                        stack.append((next_y, next_x))
+        components.append((count, max_x - min_x + 1, max_y - min_y + 1))
+    return components
 
 
 def detector_overlap_score(detections: Iterable[tuple[float, tuple[float, float, float, float]]], tile_bounds: tuple[float, float, float, float]) -> float:
@@ -487,15 +631,6 @@ def decide_tile_label(
         if supervised_probability is not None
         else (clip_positive * 0.45) + (heuristic_probability * 0.2) + (detector_score * 0.35)
     )
-
-
-def create_scan_backend() -> ScanBackend:
-    backend = os.getenv("CROSSWALK_SCAN_BACKEND", "sam31").strip().lower()
-    if backend in {"sam31", "sam3.1", "sam3"}:
-        return Sam31CrosswalkScanner()
-    if backend in {"hybrid", "clip", "clip-linear"}:
-        return HybridCrosswalkScanner()
-    raise ValueError(f"Unknown CROSSWALK_SCAN_BACKEND: {backend}")
     positive = combined >= threshold
     return TileMetrics(
         clip_positive=clip_positive,
@@ -506,3 +641,12 @@ def create_scan_backend() -> ScanBackend:
         label="crosswalk" if positive else "no_crosswalk",
         supervised_probability=supervised_probability,
     )
+
+
+def create_scan_backend() -> ScanBackend:
+    backend = os.getenv("CROSSWALK_SCAN_BACKEND", "sam31").strip().lower()
+    if backend in {"sam31", "sam3.1", "sam3"}:
+        return Sam31CrosswalkScanner()
+    if backend in {"hybrid", "clip", "clip-linear"}:
+        return HybridCrosswalkScanner()
+    raise ValueError(f"Unknown CROSSWALK_SCAN_BACKEND: {backend}")

@@ -3,9 +3,11 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { join, resolve } from "node:path";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { loadLocalEnv } from "./local-env";
+import { runCrossMaskBatch } from "./crossmask-runner";
 import {
   listAvailableDatasets,
   loadDataset,
+  loadDatasetViewport,
   loadReviewStateFromDataset,
   rawAssetPath,
   saveReviewStateForDataset,
@@ -13,10 +15,25 @@ import {
   updateTilesInDataset,
   writeDatasetArtifacts,
 } from "./dataset";
+import {
+  appendMetadataLabelVotes,
+  isMetadataDataset,
+  listMetadataDatasetEntries,
+  listMetadataDatasets,
+  loadMetadataDatasetSummary,
+  loadMetadataDatasetViewport,
+  loadMetadataTilePage,
+} from "./metadata-dataset";
 import { createRemoteController } from "./remote-controller";
 import { normalizeReviewState } from "./review-state";
 import type { ScanBatchJob } from "./scan-batch";
 import type { DatasetScene, DatasetTile, ReviewState } from "./types";
+import {
+  type RemoteServeInstance,
+  type RemoteTerminalSocketData,
+  type RemoteUpgradeServer,
+  createRemoteWebsocketHandlers,
+} from "./server-websocket";
 
 const WEB_ROOT = resolve(import.meta.dir, "..");
 const PROJECT_ROOT = resolve(WEB_ROOT, "..");
@@ -27,33 +44,13 @@ const PORT = Number(process.env.PORT ?? 8787);
 const REAL_CONFIG_PATH = join(PROJECT_ROOT, "configs", "real-dataset.toml");
 const VALIDATION_OUTPUT_ROOT = join(PROJECT_ROOT, "validation-output", "map-canvas");
 const AUTOPILOT_CACHE_ROOT = join(PROJECT_ROOT, "data", "cache", "autopilot");
+const ROAD_CLUSTER_CACHE_ROOT = join(PROJECT_ROOT, "data", "cache", "road-cluster-grid");
 const AUTOPILOT_SCHEMA_VERSION = 6;
 const validationStateStore = new Map<string, unknown>();
 const autopilotPlanCache = new Map<string, unknown>();
+const roadClusterGridCache = new Map<string, unknown>();
 const remoteController = createRemoteController(PROJECT_ROOT);
 const TMUX_SCROLLBACK_LINES = "-2000";
-
-type RemoteTerminalSocketData = {
-  jobId: string;
-  tmuxSession: string;
-  localLogPath: string;
-  lastSnapshot: string;
-  pollTimer?: Timer;
-};
-
-type RemoteUpgradeServer = {
-  upgrade(request: Request, options: { data: RemoteTerminalSocketData }): boolean;
-};
-
-type RemoteServeInstance = RemoteUpgradeServer & {
-  port: number;
-};
-
-type RemoteTerminalSocket = {
-  data: RemoteTerminalSocketData;
-  send(data: string | BufferSource): unknown;
-  close(): void;
-};
 
 function jsonResponse(data: unknown, init?: ResponseInit) {
   return new Response(JSON.stringify(data), {
@@ -222,6 +219,17 @@ function serveAsset(urlPath: string) {
     return new Response(file, { headers: { "Cache-Control": "public, max-age=3600" } });
   }
 
+  if (urlPath.startsWith("/assets/metadata/")) {
+    const match = /^\/assets\/metadata\/([^/]+)\/(.+)$/.exec(urlPath);
+    const datasetId = match?.[1];
+    const relativePath = match?.[2];
+    if (!datasetId || !relativePath || relativePath.includes("..")) return textResponse("not found", { status: 404 });
+    const fullPath = join(PROJECT_ROOT, "datasets", datasetId, relativePath);
+    const file = Bun.file(fullPath);
+    if (!file.size) return textResponse("not found", { status: 404 });
+    return new Response(file, { headers: { "Cache-Control": "public, max-age=3600" } });
+  }
+
   return textResponse("not found", { status: 404 });
 }
 
@@ -241,6 +249,9 @@ async function handleDataset(request: Request) {
 
 async function handleDatasetMeta(request: Request) {
   const { run, exportName } = datasetFromRequest(request);
+  if (isMetadataDataset(run, exportName)) {
+    return jsonResponse(loadMetadataDatasetSummary(run, exportName));
+  }
   const dataset = loadDataset(run, exportName);
   return jsonResponse(datasetSummary(dataset));
 }
@@ -260,11 +271,83 @@ async function handleScene(request: Request) {
   }
 }
 
+async function handleDatasetViewport(request: Request) {
+  const { run, exportName } = datasetFromRequest(request);
+  const url = new URL(request.url);
+  const bbox = (url.searchParams.get("bbox") ?? "").split(",").map((value) => Number(value));
+  const zoom = Number(url.searchParams.get("zoom") ?? 8);
+  const limit = Number(url.searchParams.get("limit") ?? 1400);
+  const city = url.searchParams.get("city");
+  const label = url.searchParams.get("label");
+  const split = url.searchParams.get("split");
+  if (bbox.length !== 4 || bbox.some((value) => !Number.isFinite(value)) || !Number.isFinite(zoom)) {
+    return jsonResponse({ error: "bbox=minX,minY,maxX,maxY and zoom are required." }, { status: 400 });
+  }
+  if (isMetadataDataset(run, exportName)) {
+    return jsonResponse(
+      loadMetadataDatasetViewport(run, exportName, bbox as [number, number, number, number], zoom, {
+        city: city && city !== "all" ? city : null,
+        label: label && label !== "all" ? label : null,
+        limit,
+        split: split && split !== "all" ? split : null,
+      }),
+    );
+  }
+  return jsonResponse(
+    loadDatasetViewport(run, exportName, bbox as [number, number, number, number], zoom, {
+      city: city && city !== "all" ? city : null,
+      label: label && label !== "all" ? label : null,
+      limit,
+      split: split && split !== "all" ? split : null,
+    }),
+  );
+}
+
+async function handleMetadataDatasets() {
+  return jsonResponse(listMetadataDatasets());
+}
+
+async function handleMetadataDatasetTiles(request: Request) {
+  const url = new URL(request.url);
+  const dataset = url.searchParams.get("dataset");
+  if (!dataset) {
+    return jsonResponse({ error: "dataset is required" }, { status: 400 });
+  }
+  const selectedRaw = url.searchParams.get("selected");
+  return jsonResponse(
+    loadMetadataTilePage(dataset, url.searchParams.get("cursor"), {
+      city: nullableFilter(url.searchParams.get("city")),
+      label: nullableFilter(url.searchParams.get("label")),
+      limit: Number(url.searchParams.get("limit") ?? 200),
+      review_state: nullableFilter(url.searchParams.get("review_state")),
+      selected: selectedRaw == null || selectedRaw === "all" ? null : selectedRaw === "true",
+      split: nullableFilter(url.searchParams.get("split")),
+    }),
+  );
+}
+
+async function handleCrossMaskRun(request: Request) {
+  return jsonResponse(runCrossMaskBatch(PROJECT_ROOT, await request.json()));
+}
+
+function nullableFilter(value: string | null) {
+  return value && value !== "all" ? value : null;
+}
+
 async function handleTileUpdate(request: Request, tileId: string) {
   const { run, exportName } = datasetFromRequest(request);
   const body = (await request.json()) as { label?: string; selected?: boolean };
   if (typeof body.label !== "string" || typeof body.selected !== "boolean") {
     return jsonResponse({ error: "label and selected are required" }, { status: 400 });
+  }
+  if (isMetadataDataset(run, exportName)) {
+    const [tile] = appendMetadataLabelVotes(
+      run,
+      exportName,
+      [{ confidence: 1.0, decision: body.selected ? (body.label as "crosswalk" | "no_crosswalk") : "drop", tile_id: tileId }],
+      { display_name: "Oli", kind: "human", priority: 1000, source_id: "human:oli" },
+    );
+    return jsonResponse({ tile });
   }
   const dataset = updateTileInDataset(run, exportName, tileId, { label: body.label, selected: body.selected });
   const tile = dataset.tiles.find((entry) => entry.tile_id === tileId);
@@ -427,6 +510,48 @@ async function handleAutopilotPlan(request: Request) {
   return jsonResponse(plan);
 }
 
+async function handleRoadClusterGrid(request: Request) {
+  const startedAt = Date.now();
+  const url = new URL(request.url);
+  const bbox = (url.searchParams.get("bbox") ?? "").split(",").map((value) => Number(value));
+  const zoom = Number(url.searchParams.get("zoom") ?? 0);
+  if (bbox.length !== 4 || bbox.some((value) => !Number.isFinite(value)) || !Number.isFinite(zoom)) {
+    return jsonResponse({ error: "bbox=minX,minY,maxX,maxY and zoom are required." }, { status: 400 });
+  }
+  const roundedBbox = bbox.map((value) => Math.round(value));
+  const roundedZoom = Math.round(zoom * 4) / 4;
+  const cacheKey = `${roundedBbox.join(",")}:${roundedZoom}`;
+  const cached = roadClusterGridCache.get(cacheKey);
+  if (cached) return jsonResponse(cached);
+
+  mkdirSync(ROAD_CLUSTER_CACHE_ROOT, { recursive: true });
+  const output = execFileSync(
+    pythonExecutable(),
+    [
+      "-m",
+      "crosswalk_detector.road_cluster_grid",
+      "--bbox",
+      roundedBbox.join(","),
+      "--zoom",
+      String(roundedZoom),
+      "--cache-dir",
+      ROAD_CLUSTER_CACHE_ROOT,
+    ],
+    {
+      cwd: PROJECT_ROOT,
+      encoding: "utf8",
+      maxBuffer: 20 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  const grid = JSON.parse(output);
+  roadClusterGridCache.set(cacheKey, grid);
+  console.log(
+    `Road cluster grid zoom=${roundedZoom} bbox=${roundedBbox.join(",")} cells=${grid.cells?.length ?? 0} cellSize=${grid.cellSizeM ?? 0} durationMs=${Date.now() - startedAt}`,
+  );
+  return jsonResponse(grid);
+}
+
 async function handleRemoteJobs(request: Request) {
   if (request.method === "GET") {
     return jsonResponse(remoteController.listJobs());
@@ -464,7 +589,7 @@ server = Bun.serve({
           return buildTerminalWebSocketResponse(server, request, jobId);
         }
         if (url.pathname === "/api/exports" && request.method === "GET") {
-          return jsonResponse(listAvailableDatasets());
+          return jsonResponse([...listAvailableDatasets(), ...listMetadataDatasetEntries()]);
         }
         if (url.pathname === "/api/dataset" && request.method === "GET") {
           return handleDataset(request);
@@ -474,6 +599,18 @@ server = Bun.serve({
         }
         if (url.pathname === "/api/scene" && request.method === "GET") {
           return handleScene(request);
+        }
+        if (url.pathname === "/api/dataset/viewport" && request.method === "GET") {
+          return handleDatasetViewport(request);
+        }
+        if (url.pathname === "/api/metadata-datasets" && request.method === "GET") {
+          return handleMetadataDatasets();
+        }
+        if (url.pathname === "/api/metadata-dataset/tiles" && request.method === "GET") {
+          return handleMetadataDatasetTiles(request);
+        }
+        if (url.pathname === "/api/crossmask/run" && request.method === "POST") {
+          return handleCrossMaskRun(request);
         }
         if (url.pathname === "/api/tiles/batch" && request.method === "POST") {
           return handleBatchTileUpdate(request);
@@ -496,6 +633,9 @@ server = Bun.serve({
         }
         if (url.pathname === "/api/autopilot/plan" && request.method === "GET") {
           return handleAutopilotPlan(request);
+        }
+        if (url.pathname === "/api/autopilot/road-clusters" && request.method === "GET") {
+          return handleRoadClusterGrid(request);
         }
         if (url.pathname === "/api/remote/config" && (request.method === "GET" || request.method === "PUT")) {
           return handleRemoteConfig(request);
@@ -539,51 +679,7 @@ server = Bun.serve({
       return jsonResponse({ error: String(error) }, { status: 500 });
     }
   },
-  websocket: {
-    open(ws: RemoteTerminalSocket) {
-      try {
-        const snapshot = readTerminalSnapshot(ws.data);
-        ws.data.lastSnapshot = snapshot;
-        ws.send(`\x1bc${snapshot}`);
-        ws.data.pollTimer = setInterval(() => {
-          try {
-            const nextSnapshot = readTerminalSnapshot(ws.data);
-            if (nextSnapshot === ws.data.lastSnapshot) return;
-            if (nextSnapshot.startsWith(ws.data.lastSnapshot)) {
-              ws.send(nextSnapshot.slice(ws.data.lastSnapshot.length));
-            } else {
-              ws.send(`\x1bc${nextSnapshot}`);
-            }
-            ws.data.lastSnapshot = nextSnapshot;
-          } catch (error) {
-            ws.send(`\r\n[terminal disconnected] ${String(error)}\r\n`);
-            if (ws.data.pollTimer) clearInterval(ws.data.pollTimer);
-            ws.close();
-          }
-        }, 250);
-      } catch (error) {
-        ws.send(`\r\n[terminal unavailable] ${String(error)}\r\n`);
-        ws.close();
-      }
-    },
-    message(ws: RemoteTerminalSocket, message: string | Buffer<ArrayBuffer>) {
-      try {
-        if (!tmuxSessionExists(ws.data.tmuxSession)) {
-          ws.send("\r\n[read-only] This run has finished. Showing the saved log.\r\n");
-          return;
-        }
-        const input = typeof message === "string" ? message : Buffer.from(message).toString("utf8");
-        sendTmuxInput(ws.data.tmuxSession, input);
-      } catch (error) {
-        ws.send(`\r\n[input failed] ${String(error)}\r\n`);
-      }
-    },
-    close(ws: RemoteTerminalSocket) {
-      if (ws.data.pollTimer) {
-        clearInterval(ws.data.pollTimer);
-      }
-    },
-  },
+  websocket: createRemoteWebsocketHandlers({ readTerminalSnapshot, tmuxSessionExists, sendTmuxInput }),
 } as never) as RemoteServeInstance;
 
 console.log(`Crosswalk review server on http://localhost:${server.port}`);

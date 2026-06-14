@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 import csv
+import gzip
 import json
 import math
 import os
@@ -145,7 +146,7 @@ class ClipCrosswalkScorer:
         token = os.getenv("HF_TOKEN")
         self.processor = AutoProcessor.from_pretrained(model_id, token=token)
         self.model = CLIPModel.from_pretrained(model_id, token=token)
-        self.device = "mps" if torch.backends.mps.is_available() else "cpu"
+        self.device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
         self.model.to(self.device)
         self.model.eval()
 
@@ -402,4 +403,92 @@ def build_real_dataset(
     }
     (exports_root / "summary.json").write_text(json.dumps(summary, indent=2))
     (manifests_root / "real-scenes.json").write_text(json.dumps([asdict(scene) for scene in config.scenes], indent=2))
+    write_compact_manifest(exports_root, run_name, export_name, config.scenes, selected_rows)
     return summary
+
+
+def write_compact_manifest(
+    export_root: Path,
+    run_name: str,
+    export_name: str,
+    scenes: tuple[SceneSpec, ...],
+    selected_rows: list[dict[str, object]],
+) -> dict[str, str]:
+    """Write a small gzip manifest that can recreate the selected tile dataset."""
+
+    compact_json = export_root / "compact-manifest.json.gz"
+    compact_csv = export_root / "labels.compact.csv.gz"
+    scenes_payload = []
+    for scene in scenes:
+        scenes_payload.append(
+            {
+                **asdict(scene),
+                "bbox_mercator": [round(value, 3) for value in scene_bbox(scene)],
+                "wms_url": build_wms_url(scene),
+            }
+        )
+
+    rows_payload = []
+    for row in selected_rows:
+        rows_payload.append(
+            {
+                "tile_id": row["tile_id"],
+                "scene_id": row["scene_id"],
+                "split": row["split"],
+                "label": row["label"],
+                "row": row["row"],
+                "col": row["col"],
+                "bbox_mercator": [round(float(value), 3) for value in row["bbox_mercator"]],
+            }
+        )
+
+    payload = {
+        "run_name": run_name,
+        "export_name": export_name,
+        "format": "crosswalk-compact-v1",
+        "source_layer": "ch.swisstopo.swissimage-product",
+        "tile_size_m": 25,
+        "scenes": scenes_payload,
+        "tiles": rows_payload,
+    }
+    with gzip.open(compact_json, "wt", encoding="utf-8") as handle:
+        json.dump(payload, handle, separators=(",", ":"))
+
+    with gzip.open(compact_csv, "wt", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "tile_id",
+                "scene_id",
+                "split",
+                "label",
+                "row",
+                "col",
+                "min_x",
+                "min_y",
+                "max_x",
+                "max_y",
+            ],
+        )
+        writer.writeheader()
+        for row in selected_rows:
+            min_x, min_y, max_x, max_y = [round(float(value), 3) for value in row["bbox_mercator"]]
+            writer.writerow(
+                {
+                    "tile_id": row["tile_id"],
+                    "scene_id": row["scene_id"],
+                    "split": row["split"],
+                    "label": row["label"],
+                    "row": row["row"],
+                    "col": row["col"],
+                    "min_x": min_x,
+                    "min_y": min_y,
+                    "max_x": max_x,
+                    "max_y": max_y,
+                }
+            )
+
+    return {
+        "compact_json": str(compact_json),
+        "compact_csv": str(compact_csv),
+    }

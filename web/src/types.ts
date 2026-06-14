@@ -55,6 +55,7 @@ export type DatasetSummary = {
   selected_crosswalk: number;
   selected_no_crosswalk: number;
   dropped_tiles: number;
+  label_counts?: Record<string, number>;
   scenes: DatasetScene[];
 };
 
@@ -62,6 +63,30 @@ export type ScenePayload = {
   summary: DatasetSummary;
   scene: DatasetScene;
   tiles: DatasetTile[];
+};
+
+export type DatasetViewportCluster = {
+  id: string;
+  bbox_mercator: [number, number, number, number];
+  center_mercator: [number, number];
+  total: number;
+  crosswalk: number;
+  no_crosswalk: number;
+  labels: Record<string, number>;
+  splits: Record<string, number>;
+  cities: Record<string, number>;
+};
+
+export type DatasetViewportPayload = {
+  summary: DatasetSummary;
+  bbox_mercator: [number, number, number, number];
+  zoom: number;
+  mode: "tiles" | "clusters";
+  total_matching: number;
+  returned_tiles: number;
+  returned_clusters: number;
+  tiles: DatasetTile[];
+  clusters: DatasetViewportCluster[];
 };
 
 export type RealDatasetConfig = {
@@ -103,6 +128,122 @@ export type DatasetListEntry = {
   path: string;
 };
 
+export type LabelDecision = "crosswalk" | "no_crosswalk" | "drop";
+
+export type LabelSourceKind = "model" | "human";
+
+export type LabelSource = {
+  source_id: string;
+  kind: LabelSourceKind;
+  priority: number;
+  display_name: string;
+};
+
+export type ImageLabelVote = {
+  vote_id: string;
+  source: LabelSource;
+  decision: LabelDecision;
+  confidence?: number;
+  created_at: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type ResolvedLabel = {
+  decision: LabelDecision;
+  source_id: string;
+  source_kind: LabelSourceKind;
+  resolved_by: "human_override" | "priority" | "weighted_vote";
+  confidence?: number;
+  updated_at: string;
+};
+
+export type SwisstopoSourceRef = {
+  provider: "swisstopo";
+  product: "SWISSIMAGE";
+  access: "stac-cog" | "wmts";
+  crs: "EPSG:2056";
+  asset_id?: string;
+  asset_url?: string;
+  acquisition_year?: number;
+  resolution_m?: number;
+};
+
+export type TileReconstruction = {
+  source_scene_id: string;
+  row: number;
+  col: number;
+  tile_size_m: number;
+  tile_bbox_mercator: [number, number, number, number];
+  crop_px: {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  };
+  relative_path: string;
+};
+
+export type RoadOverlayRef = {
+  overlay_id: string;
+  cell_id: string;
+  perimeter_id: string;
+  surface_ratio: number;
+  road_pixel_ratio?: number;
+  line_density_score?: number;
+  cluster_score?: number;
+  tile_road_coverage?: number;
+  nearest_road_distance_m?: number;
+};
+
+export type MetadataDatasetImage = {
+  image_id: string;
+  tile_id: string;
+  source_scene_id: string;
+  perimeter_id: string;
+  scene_id: string;
+  city: string;
+  split: "train" | "val" | "test";
+  row: number;
+  col: number;
+  bbox_mercator: [number, number, number, number];
+  swisstopo: SwisstopoSourceRef;
+  reconstruction: TileReconstruction;
+  road_overlay_ref?: RoadOverlayRef;
+  labels: ImageLabelVote[];
+  resolved_label: ResolvedLabel;
+  review_state: "unreviewed" | "reviewed" | "disputed" | "dropped";
+  selected_for_training: boolean;
+  image_path?: string;
+  thumbnail_path?: string;
+};
+
+export type MetadataDatasetShard = {
+  shard_id: string;
+  path: string;
+  tile_count: number;
+  scene_id?: string;
+  perimeter_id?: string;
+};
+
+export type MetadataDatasetIndex = {
+  format: "crosswalk-jsonl-v1";
+  dataset_id: string;
+  display_name?: string;
+  run_name: string;
+  export_name: string;
+  tile_count: number;
+  selected_count: number;
+  shard_target_count: number;
+  shards: MetadataDatasetShard[];
+};
+
+export type MetadataTilePage = {
+  dataset: MetadataDatasetIndex;
+  rows: MetadataDatasetImage[];
+  next_cursor: string | null;
+  returned_count: number;
+};
+
 export type TileUpdate = {
   label: string;
   selected: boolean;
@@ -127,6 +268,35 @@ export type BrowserLabelSuggestion = {
 };
 
 export type MapBasemap = "osm" | "swisstopo" | "roads";
+
+export type RoadClusterCell = {
+  id: string;
+  row: number;
+  col: number;
+  sizeM: number;
+  surfaceRatio: number;
+  densityScore: number;
+  roadPixelRatio?: number;
+  lineDensityScore?: number;
+  clusterScore?: number;
+  bboxMercator: [number, number, number, number];
+};
+
+export type RoadGridLine = {
+  id: string;
+  positions: [[number, number], [number, number]];
+};
+
+export type RoadClusterGrid = {
+  sourceLayer: string;
+  method: string;
+  zoom: number;
+  cellSizeM: number;
+  bboxMercator: [number, number, number, number];
+  surfaceThreshold: number;
+  surfaceCoverage: number;
+  cells: RoadClusterCell[];
+};
 
 export type SceneReviewState = {
   scan_radius: number;

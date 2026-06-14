@@ -1,0 +1,12 @@
+{
+  "buildCommand": "cd web && VITE_CROSSWALK_STATIC_ONLY=1 bun run build",
+  "framework": "vite",
+  "installCommand": "python3 scripts/download_submission_assets.py --skip-model && cd web && bun install",
+  "outputDirectory": "web/dist",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -205,7 +205,7 @@ class ScanService:
 
             job.update(stage="scoring-tiles")
             context_images = [] if scanner.backend_name == "sam31" else [crop_tile(scene_image, scene, tile, padding_tiles=1.0) for tile in tiles]
-            center_images = [] if scanner.backend_name == "sam31" else [crop_tile(scene_image, scene, tile) for tile in tiles]
+            center_images = [crop_tile(scene_image, scene, tile) for tile in tiles]
             supervised_scores = (
                 scanner.score_supervised_context_images(context_images)
                 if scanner.backend_name != "sam31" and scanner.has_supervised_classifier
@@ -219,6 +219,17 @@ class ScanService:
                     return
                 if scanner.backend_name == "sam31":
                     sam_metrics = sam31_scores[index - 1]
+                    rejection_reason = scanner.image_rejection_reason(center_images[index - 1], sam_metrics)
+                    if rejection_reason is not None:
+                        sam_metrics = replace(
+                            sam_metrics,
+                            label="no_crosswalk",
+                            score=0.0,
+                            peak=0.0,
+                            coverage=0.0,
+                            box_overlap=0.0,
+                            prompt=f"suppressed:{rejection_reason}",
+                        )
                     suggestion = {
                         "tile_id": tile.tile_id,
                         "label": sam_metrics.label,

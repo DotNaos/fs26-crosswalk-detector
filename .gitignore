@@ -11,12 +11,23 @@ build/
 .env.*
 web/node_modules/
 web/dist/
+web/package-lock.json
+web/test-artifacts/
+prototypes/**/node_modules/
 .local/
 
 # Local ML assets
 data/
 models/
 validation-output/
+dogfood-output/
+jobs/
+logs/
+prototypes/
+results/
+review-exports/
+vpn
+web/public/static-datasets/
 *.pt
 *.pth
 *.ckpt
@@ -25,3 +36,19 @@ validation-output/
 *.keras
 *.npy
 *.npz
+
+# Git-friendly dataset metadata is allowed under datasets/.
+# Keep generated imagery, caches, and bulky archives out of git.
+datasets/**/images/
+datasets/**/thumbnails/
+datasets/**/cache/
+datasets/sam3-*/
+datasets/**/*.jpg
+datasets/**/*.jpeg
+datasets/**/*.png
+datasets/**/*.tif
+datasets/**/*.tiff
+datasets/**/*.zip
+datasets/**/*.tar
+datasets/**/*.tar.gz
+.vercel

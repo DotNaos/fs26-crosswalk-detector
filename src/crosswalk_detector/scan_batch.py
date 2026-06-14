@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 from typing import Any
+
+import numpy as np
+from PIL import Image
 
 from .scan_backend import (
     CLIP_MODEL_ID,
@@ -63,7 +67,7 @@ def _parse_tiles(payload: dict[str, Any]) -> list[TileRequest]:
     ]
 
 
-def run_scan_batch_job(job_payload: dict[str, Any], progress: bool = False) -> dict[str, Any]:
+def run_scan_batch_job(job_payload: dict[str, Any], progress: bool = False, mask_output_dir: Path | None = None) -> dict[str, Any]:
     scene = _parse_scene(job_payload)
     tiles = _parse_tiles(job_payload)
     threshold = float(job_payload.get("threshold", 0.32))
@@ -92,6 +96,18 @@ def run_scan_batch_job(job_payload: dict[str, Any], progress: bool = False) -> d
     for index, tile in enumerate(tiles, start=1):
         if scanner.backend_name == "sam31":
             sam_metrics = sam31_scores[index - 1]
+            rejection_reason = scanner.image_rejection_reason(crop_tile(scene_image, scene, tile), sam_metrics)
+            if rejection_reason is not None:
+                sam_metrics = replace(
+                    sam_metrics,
+                    label="no_crosswalk",
+                    score=0.0,
+                    peak=0.0,
+                    coverage=0.0,
+                    box_overlap=0.0,
+                    prompt=f"suppressed:{rejection_reason}",
+                    mask=None,
+                )
             prediction = {
                 "tile_id": tile.tile_id,
                 "label": sam_metrics.label,
@@ -104,6 +120,9 @@ def run_scan_batch_job(job_payload: dict[str, Any], progress: bool = False) -> d
                 "selected": True,
                 "review_source": "python-sam31-scan",
             }
+            mask_artifact = _write_mask_artifact(mask_output_dir, job_payload, tile.tile_id, sam_metrics.mask)
+            if mask_artifact is not None:
+                prediction["mask_artifact"] = mask_artifact
             label = sam_metrics.label
         else:
             tile_bounds = _tile_pixel_bounds(scene, tile.bbox_mercator)
@@ -178,8 +197,10 @@ def run_scan_batch_job(job_payload: dict[str, Any], progress: bool = False) -> d
             "backend": scanner.backend_name,
             "sam_model": SAM31_MODEL_VERSION if scanner.backend_name == "sam31" else None,
             "sam_prompts": list(scanner.prompts) if scanner.backend_name == "sam31" else None,
+            "sam_negative_prompts": list(scanner.negative_prompts) if scanner.backend_name == "sam31" else None,
             "sam_confidence_threshold": scanner.confidence_threshold if scanner.backend_name == "sam31" else None,
             "sam_tile_threshold": scanner.tile_threshold if scanner.backend_name == "sam31" else None,
+            "sam_negative_tile_threshold": scanner.negative_tile_threshold if scanner.backend_name == "sam31" else None,
             "supervised_model": "clip_linear" if scanner.backend_name != "sam31" and scanner.has_supervised_classifier else None,
             "supervised_model_path": str(SUPERVISED_CLIP_MODEL_PATH) if scanner.backend_name != "sam31" and scanner.has_supervised_classifier else None,
             "supervised_threshold": scanner.supervised_threshold if scanner.backend_name != "sam31" and scanner.has_supervised_classifier else None,
@@ -199,6 +220,32 @@ def write_scan_batch_result(path: Path, result: dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(result, indent=2), encoding="utf8")
     return path
+
+
+def _write_mask_artifact(
+    mask_output_dir: Path | None,
+    job_payload: dict[str, Any],
+    tile_id: str,
+    mask: np.ndarray | None,
+) -> dict[str, Any] | None:
+    if mask_output_dir is None or mask is None or not mask.size:
+        return None
+    shard_id = str(job_payload.get("shard_id") or job_payload.get("scene", {}).get("scene_id") or "scan")
+    path = mask_output_dir / _safe_path_part(shard_id) / f"{_safe_path_part(tile_id)}.png"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mask_image = Image.fromarray(mask.astype(np.uint8) * 255, mode="L")
+    mask_image.save(path)
+    return {
+        "kind": "sam3-pseudo-mask",
+        "format": "png",
+        "path": path.as_posix(),
+        "width": mask_image.width,
+        "height": mask_image.height,
+    }
+
+
+def _safe_path_part(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", value)
 
 
 def summarize_scan_batch_result(result: dict[str, Any]) -> str:

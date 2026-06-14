@@ -2,7 +2,7 @@ import { parse, unparse } from "papaparse";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, renameSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { normalizeReviewState } from "./review-state";
-import type { DatasetContract, DatasetListEntry, DatasetScene, DatasetTile, ReviewState } from "./types";
+import type { DatasetContract, DatasetListEntry, DatasetScene, DatasetTile, DatasetViewportCluster, DatasetViewportPayload, ReviewState } from "./types";
 
 type LegacyRow = Record<string, string>;
 
@@ -71,6 +71,59 @@ export function loadDataset(runName: string, exportName: string): DatasetContrac
   return legacy;
 }
 
+export function loadDatasetViewport(
+  runName: string,
+  exportName: string,
+  bbox: [number, number, number, number],
+  zoom: number,
+  options: {
+    city?: string | null;
+    label?: string | null;
+    limit?: number;
+    split?: string | null;
+  } = {},
+): DatasetViewportPayload {
+  const dataset = loadDataset(runName, exportName);
+  const limit = Math.max(100, Math.min(Number(options.limit ?? 1400) || 1400, 5000));
+  const matching = dataset.tiles.filter((tile) => {
+    const rect = bboxToRect(tile.bbox_mercator);
+    if (!rect) return false;
+    if (!rectIntersects(rect, bbox)) return false;
+    if (options.city && tile.city !== options.city) return false;
+    if (options.label && tile.label !== options.label) return false;
+    if (options.split && tile.split !== options.split) return false;
+    return true;
+  });
+
+  const summary = datasetSummary(dataset);
+  if (matching.length <= Math.min(250, limit) || zoom >= 14.5) {
+    return {
+      summary,
+      bbox_mercator: bbox,
+      zoom,
+      mode: "tiles",
+      total_matching: matching.length,
+      returned_tiles: matching.length,
+      returned_clusters: 0,
+      tiles: matching.sort((a, b) => a.tile_id.localeCompare(b.tile_id)),
+      clusters: [],
+    };
+  }
+
+  const clusters = clusterTiles(matching, bbox, zoom);
+  return {
+    summary,
+    bbox_mercator: bbox,
+    zoom,
+    mode: "clusters",
+    total_matching: matching.length,
+    returned_tiles: 0,
+    returned_clusters: clusters.length,
+    tiles: [],
+    clusters,
+  };
+}
+
 export function updateTileInDataset(
   runName: string,
   exportName: string,
@@ -128,6 +181,25 @@ export function normalizeDataset(dataset: DatasetContract): DatasetContract {
     split_targets: dataset.split_targets ?? {},
     scenes,
     tiles,
+  };
+}
+
+function datasetSummary(dataset: DatasetContract) {
+  const selected = dataset.tiles.filter((tile) => tile.selected);
+  const counts = countLabels(dataset.tiles);
+  const selectedCounts = countLabels(selected);
+  return {
+    run_name: dataset.run_name,
+    export_name: dataset.export_name,
+    target_per_class: dataset.target_per_class ?? null,
+    split_targets: dataset.split_targets ?? {},
+    total_tiles: dataset.tiles.length,
+    selected_tiles: selected.length,
+    selected_crosswalk: selectedCounts.crosswalk ?? 0,
+    selected_no_crosswalk: selectedCounts.no_crosswalk ?? 0,
+    dropped_tiles: dataset.tiles.length - selected.length,
+    label_counts: counts,
+    scenes: dataset.scenes,
   };
 }
 
@@ -226,7 +298,7 @@ function legacyRowToTile(runName: string, row: LegacyRow): DatasetTile {
     col: colIndex,
     relative_path: relativePath,
     image_path: imagePath,
-    bbox_mercator: parseBBox(row.bbox_mercator),
+    bbox_mercator: parseBBox(row.bbox_mercator) ?? parseBBoxColumns(row),
     clip_probability: Number(row.clip_probability ?? probability),
     heuristic_probability: Number(row.heuristic_probability ?? probability),
     combined_probability: Number(row.combined_probability ?? probability),
@@ -236,6 +308,17 @@ function legacyRowToTile(runName: string, row: LegacyRow): DatasetTile {
     status,
     review_source: reviewSource,
   };
+}
+
+function parseBBoxColumns(row: LegacyRow) {
+  const minX = Number(row.min_x);
+  const minY = Number(row.min_y);
+  const maxX = Number(row.max_x);
+  const maxY = Number(row.max_y);
+  if ([minX, minY, maxX, maxY].every(Number.isFinite)) {
+    return [minX, minY, maxX, maxY] as [number, number, number, number];
+  }
+  return null;
 }
 
 function toWebImagePath(value: string) {
@@ -302,6 +385,88 @@ function parseBBox(value?: string) {
   } catch {
     return null;
   }
+}
+
+function bboxToRect(value: DatasetTile["bbox_mercator"]) {
+  if (!value) return null;
+  if (Array.isArray(value)) {
+    const [minX, minY, maxX, maxY] = value.map(Number);
+    if ([minX, minY, maxX, maxY].every(Number.isFinite)) {
+      return [minX, minY, maxX, maxY] as [number, number, number, number];
+    }
+    return null;
+  }
+  const minX = Number(value.min_x ?? value.left);
+  const minY = Number(value.min_y ?? value.bottom);
+  const maxX = Number(value.max_x ?? value.right);
+  const maxY = Number(value.max_y ?? value.top);
+  if ([minX, minY, maxX, maxY].every(Number.isFinite)) {
+    return [minX, minY, maxX, maxY] as [number, number, number, number];
+  }
+  return null;
+}
+
+function rectIntersects(rect: [number, number, number, number], bbox: [number, number, number, number]) {
+  return rect[0] <= bbox[2] && rect[2] >= bbox[0] && rect[1] <= bbox[3] && rect[3] >= bbox[1];
+}
+
+function countLabels(tiles: DatasetTile[]) {
+  const counts: Record<string, number> = {};
+  for (const tile of tiles) {
+    const label = tile.label || "unknown";
+    counts[label] = (counts[label] ?? 0) + 1;
+  }
+  return counts;
+}
+
+function increment(map: Record<string, number>, key: string) {
+  map[key] = (map[key] ?? 0) + 1;
+}
+
+function clusterTiles(tiles: DatasetTile[], bbox: [number, number, number, number], zoom: number): DatasetViewportCluster[] {
+  const width = Math.max(1, bbox[2] - bbox[0]);
+  const height = Math.max(1, bbox[3] - bbox[1]);
+  const grid = Math.max(8, Math.min(48, Math.round(10 + zoom * 1.6)));
+  const cols = grid;
+  const rows = Math.max(4, Math.round(grid * (height / width)));
+  const clusters = new Map<string, DatasetViewportCluster>();
+
+  for (const tile of tiles) {
+    const rect = bboxToRect(tile.bbox_mercator);
+    if (!rect) continue;
+    const centerX = (rect[0] + rect[2]) / 2;
+    const centerY = (rect[1] + rect[3]) / 2;
+    const col = Math.max(0, Math.min(cols - 1, Math.floor(((centerX - bbox[0]) / width) * cols)));
+    const row = Math.max(0, Math.min(rows - 1, Math.floor(((bbox[3] - centerY) / height) * rows)));
+    const id = `${row}:${col}`;
+    const cellMinX = bbox[0] + (col / cols) * width;
+    const cellMaxX = bbox[0] + ((col + 1) / cols) * width;
+    const cellMaxY = bbox[3] - (row / rows) * height;
+    const cellMinY = bbox[3] - ((row + 1) / rows) * height;
+    let cluster = clusters.get(id);
+    if (!cluster) {
+      cluster = {
+        id,
+        bbox_mercator: [cellMinX, cellMinY, cellMaxX, cellMaxY],
+        center_mercator: [(cellMinX + cellMaxX) / 2, (cellMinY + cellMaxY) / 2],
+        total: 0,
+        crosswalk: 0,
+        no_crosswalk: 0,
+        labels: {},
+        splits: {},
+        cities: {},
+      };
+      clusters.set(id, cluster);
+    }
+    cluster.total += 1;
+    if (tile.label === "crosswalk") cluster.crosswalk += 1;
+    if (tile.label === "no_crosswalk") cluster.no_crosswalk += 1;
+    increment(cluster.labels, tile.label || "unknown");
+    increment(cluster.splits, tile.split || "unknown");
+    increment(cluster.cities, tile.city || "unknown");
+  }
+
+  return [...clusters.values()].sort((a, b) => b.total - a.total);
 }
 
 function buildScenesFromTiles(tiles: DatasetTile[]): DatasetScene[] {
@@ -391,15 +556,6 @@ function buildSummary(dataset: DatasetContract) {
     scene_count: dataset.scenes.length,
     last_review_update_at: new Date().toISOString(),
   };
-}
-
-function countLabels(tiles: DatasetTile[]) {
-  const counts: Record<string, number> = {};
-  for (const tile of tiles) {
-    const label = tile.label || "unknown";
-    counts[label] = (counts[label] ?? 0) + 1;
-  }
-  return counts;
 }
 
 function writeLabelsCsv(dataset: DatasetContract) {

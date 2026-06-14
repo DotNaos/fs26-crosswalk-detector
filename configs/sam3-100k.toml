@@ -1,0 +1,78 @@
+dataset_id = "sam3-100k-v1"
+display_name = "SAM3 100k v1"
+run_name = "sam3-100k-v1"
+export_name = "metadata-100k-v1"
+target_count = 100000
+tile_size_m = 25
+scene_size_m = 800
+image_px = 2048
+shard_target_count = 1024
+
+[source]
+access = "wmts"
+crs = "EPSG:2056"
+resolution_m = 0.1
+
+[[scene_groups]]
+city = "Zurich"
+split = "train"
+latitude = 47.3769
+longitude = 8.5417
+grid_rows = 4
+grid_cols = 5
+
+[[scene_groups]]
+city = "Basel"
+split = "train"
+latitude = 47.5596
+longitude = 7.5886
+grid_rows = 4
+grid_cols = 5
+
+[[scene_groups]]
+city = "Bern"
+split = "train"
+latitude = 46.9480
+longitude = 7.4474
+grid_rows = 4
+grid_cols = 4
+
+[[scene_groups]]
+city = "Lausanne"
+split = "train"
+latitude = 46.5197
+longitude = 6.6323
+grid_rows = 2
+grid_cols = 7
+
+[[scene_groups]]
+city = "Winterthur"
+split = "val"
+latitude = 47.4990
+longitude = 8.7241
+grid_rows = 2
+grid_cols = 4
+
+[[scene_groups]]
+city = "Lucerne"
+split = "val"
+latitude = 47.0502
+longitude = 8.3093
+grid_rows = 1
+grid_cols = 7
+
+[[scene_groups]]
+city = "Chur"
+split = "test"
+latitude = 46.8508
+longitude = 9.5329
+grid_rows = 2
+grid_cols = 4
+
+[[scene_groups]]
+city = "St. Gallen"
+split = "test"
+latitude = 47.4245
+longitude = 9.3767
+grid_rows = 1
+grid_cols = 7

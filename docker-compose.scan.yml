@@ -1,0 +1,21 @@
+services:
+  scan-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.scan
+    ports:
+      - "127.0.0.1:8000:8000"
+    env_file:
+      - .env
+    environment:
+      CROSSWALK_SCAN_BACKEND: "${CROSSWALK_SCAN_BACKEND:-sam31}"
+      CROSSWALK_SCAN_HOST: "0.0.0.0"
+      CROSSWALK_SCAN_PORT: "8000"
+      HF_HOME: "/cache/huggingface"
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./.cache/huggingface:/cache/huggingface
+    gpus: all
+    shm_size: "2gb"
+    restart: unless-stopped

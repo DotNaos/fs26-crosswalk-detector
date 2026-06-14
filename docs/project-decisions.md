@@ -63,11 +63,12 @@ Reasoning:
 
 ## Labeling Decision
 
-- Use a weak-label pipeline first:
-  1. location and map heuristics
-  2. general-purpose vision detection or segmentation
-  3. confidence-based bucket assignment
-  4. small manual review
+- For the `sam3-100k-v1` dataset, use `SAM3.1` as the primary automatic label source.
+- Keep map heuristics and road overlays for sampling, prioritization, and auditing, not as the final automatic label.
+- Store every automatic and human decision as a label vote.
+- Do not assume a fixed number of model votes per image.
+- Resolve labels by source priority, with human labels as the highest-priority source.
+- Keep the final resolved label separate from the vote history.
 - Manual review should focus on:
   - uncertain cases
   - random spot checks from likely positives
@@ -79,11 +80,10 @@ Reasoning:
 
 ### Pre-labeling Model
 
-- Use a scriptable general-purpose vision pipeline to accelerate label creation.
-- A good fit is an open-vocabulary detector plus segmentation, for example:
-  - `Grounding DINO`
-  - `SAM 2`
-- This is for candidate discovery and pseudo-labeling, not the final project model.
+- Use `SAM3.1` for the 100k metadata dataset's automatic labels.
+- Treat older detector, segmentation, CLIP, or heuristic signals as historical pilot inputs or sampling helpers.
+- SAM3.1 labels are still suggestions until they are resolved by priority and, where needed, human review.
+- This is for dataset construction, not the final course model.
 
 ### Final Course Model
 
@@ -175,8 +175,10 @@ The real storage pressure comes from the source imagery and repeated scan output
 ## Operational Guidance
 
 - Keep raw imagery outside git.
-- Keep exported datasets outside git or in ignored local paths.
-- Keep only metadata, documentation, and lightweight code in the repository.
+- Keep generated image exports outside git or in ignored local paths.
+- Keep JSONL metadata datasets, documentation, and lightweight code in the repository.
+- Do not commit dataset images, thumbnails, source COGs, caches, ZIPs, or archives.
+- Shard metadata rows by scene and perimeter instead of storing a 100k-row dataset in one file.
 - Treat the first milestone as a pipeline milestone, not a scale milestone.
 - Success for the first milestone means:
   - raw imagery can be retrieved reproducibly

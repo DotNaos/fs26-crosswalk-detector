@@ -2,6 +2,9 @@ import type { AutopilotBvhCell } from "../autopilot-planner";
 
 export const DEFAULT_MAP_CENTER: [number, number] = [46.8, 8.25];
 export const GRID_ZOOM_THRESHOLD = 16;
+export const ROAD_CLUSTER_MIN_ZOOM = 14;
+export const ROAD_CLUSTER_VIEWPORT_ZOOM = 14;
+export const ROAD_CLUSTER_REQUEST_ZOOM = 19;
 export const REMOTE_SCAN_THRESHOLD = 0.5;
 
 const WEB_MERCATOR_WORLD_MIN = -20037508.342789244;
@@ -19,6 +22,29 @@ export function dashArrayForZoom(zoom: number, on: number, off: number, minimum 
   return `${dashOn} ${dashOff}`;
 }
 
+type MapLayerVisibilityInput = {
+  hasAutopilotPlan?: boolean;
+  hasSceneTiles?: boolean;
+  hasSelectedScene?: boolean;
+  zoom: number;
+};
+
+export function shouldShowFineGrid({ hasSceneTiles, hasSelectedScene, zoom }: MapLayerVisibilityInput) {
+  return Boolean(hasSelectedScene && hasSceneTiles && zoom >= GRID_ZOOM_THRESHOLD);
+}
+
+export function shouldShowAutopilotSegmentation(input: MapLayerVisibilityInput) {
+  return input.zoom >= ROAD_CLUSTER_MIN_ZOOM;
+}
+
+export function shouldUseViewportRoadGrid(zoom: number) {
+  return zoom >= ROAD_CLUSTER_VIEWPORT_ZOOM;
+}
+
+export function roadClusterRequestZoomForMapZoom(_zoom: number) {
+  return ROAD_CLUSTER_REQUEST_ZOOM;
+}
+
 export function bvhLineWeight(depth: number) {
   if (depth <= 0) return 4.8;
   if (depth <= 1) return 4;
@@ -34,20 +60,20 @@ export function bvhLineColor(cell: AutopilotBvhCell) {
   return "#f59e0b";
 }
 
-function leafletTileSizeM(zoom: number) {
+function webMercatorTileSizeM(zoom: number) {
   const tileZoom = Math.round(clamp(zoom, 0, 22));
   return WEB_MERCATOR_WORLD_SIZE / 2 ** tileZoom;
 }
 
-function leafletZoomForCellSize(sizeM: number) {
+function webMercatorZoomForCellSize(sizeM: number) {
   return Math.round(clamp(Math.log2(WEB_MERCATOR_WORLD_SIZE / Math.max(1, sizeM)), 0, 22));
 }
 
-export function snapBboxToLeafletTileGrid(
+export function snapBboxToWebMercatorTileGrid(
   bbox: [number, number, number, number],
   sizeM: number,
 ): [number, number, number, number] {
-  const tileSizeM = leafletTileSizeM(leafletZoomForCellSize(sizeM));
+  const tileSizeM = webMercatorTileSizeM(webMercatorZoomForCellSize(sizeM));
   const snapDown = (value: number) => WEB_MERCATOR_WORLD_MIN + Math.floor((value - WEB_MERCATOR_WORLD_MIN) / tileSizeM) * tileSizeM;
   const snapUp = (value: number) => WEB_MERCATOR_WORLD_MIN + Math.ceil((value - WEB_MERCATOR_WORLD_MIN) / tileSizeM) * tileSizeM;
   return [snapDown(bbox[0]), snapDown(bbox[1]), snapUp(bbox[2]), snapUp(bbox[3])];

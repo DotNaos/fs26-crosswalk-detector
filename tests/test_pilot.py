@@ -1,5 +1,6 @@
-from pathlib import Path
 import importlib.util
+
+import pytest
 
 from crosswalk_detector import build_pilot_summary, load_pilot_config, raw_size_mb
 from crosswalk_detector.pilot import (
@@ -8,8 +9,12 @@ from crosswalk_detector.pilot import (
     derive_split_targets,
     export_balanced_seed_set,
     iter_city_tile_jobs,
+    repo_root,
     sliding_window_count,
 )
+
+
+ROOT = repo_root()
 
 
 def test_raw_size_mb_uses_current_planning_estimate() -> None:
@@ -23,9 +28,7 @@ def test_sliding_window_count_matches_documented_examples() -> None:
 
 
 def test_local_debug_config_stays_within_budget() -> None:
-    config = load_pilot_config(
-        Path("/Users/oli/school/FS26/code/crosswalk-detector/configs/local-debug.json")
-    )
+    config = load_pilot_config(ROOT / "configs/local-debug.json")
 
     summary = build_pilot_summary(config)
 
@@ -36,9 +39,7 @@ def test_local_debug_config_stays_within_budget() -> None:
 
 
 def test_local_debug_config_yields_small_tile_fetch_grid() -> None:
-    config = load_pilot_config(
-        Path("/Users/oli/school/FS26/code/crosswalk-detector/configs/local-debug.json")
-    )
+    config = load_pilot_config(ROOT / "configs/local-debug.json")
 
     jobs = iter_city_tile_jobs(config.cities[0], config.wmts_zoom, config.wmts_tile_radius)
 
@@ -47,9 +48,13 @@ def test_local_debug_config_yields_small_tile_fetch_grid() -> None:
 
 
 def test_export_balanced_seed_set_uses_equal_class_counts() -> None:
+    review_csv = ROOT / "data/processed/local-debug-v1/reviews/manual-review-v1.csv"
+    if not review_csv.exists():
+        pytest.skip("local debug review fixture is not available")
+
     split_targets = derive_split_targets(64, {"train": 0.7, "val": 0.15, "test": 0.15})
     summary = export_balanced_seed_set(
-        Path("/Users/oli/school/FS26/code/crosswalk-detector/data/processed/local-debug-v1/reviews/manual-review-v1.csv"),
+        review_csv,
         export_name="balanced-seed-test",
         target_per_class=64,
         split_targets=split_targets,
@@ -73,12 +78,10 @@ def test_crosswalk_score_distinguishes_known_positive_from_known_negative() -> N
     if importlib.util.find_spec("numpy") is None or importlib.util.find_spec("PIL") is None:
         return
 
-    positive = Path(
-        "/Users/oli/school/FS26/code/crosswalk-detector/data/raw/local-debug-v1/wmts-3857-z20/zurich/20/549168/367195.jpeg"
-    )
-    negative = Path(
-        "/Users/oli/school/FS26/code/crosswalk-detector/data/raw/local-debug-v1/wmts-3857-z20/chur/20/552052/369445.jpeg"
-    )
+    positive = ROOT / "data/raw/local-debug-v1/wmts-3857-z20/zurich/20/549168/367195.jpeg"
+    negative = ROOT / "data/raw/local-debug-v1/wmts-3857-z20/chur/20/552052/369445.jpeg"
+    if not positive.exists() or not negative.exists():
+        pytest.skip("local debug image fixtures are not available")
 
     assert crosswalk_score(positive) > crosswalk_score(negative)
 
@@ -87,9 +90,13 @@ def test_full_build_uses_unique_raw_images_only() -> None:
     if importlib.util.find_spec("numpy") is None or importlib.util.find_spec("PIL") is None:
         return
 
+    review_csv = ROOT / "data/processed/local-debug-v1/reviews/manual-review-v1.csv"
+    if not review_csv.exists():
+        pytest.skip("local debug review fixture is not available")
+
     summary = build_full_capped_dataset(
-        Path("/Users/oli/school/FS26/code/crosswalk-detector/configs/local-debug.json"),
-        Path("/Users/oli/school/FS26/code/crosswalk-detector/data/processed/local-debug-v1/reviews/manual-review-v1.csv"),
+        ROOT / "configs/local-debug.json",
+        review_csv,
         export_name="full-capped-test-raw-only",
     )
 

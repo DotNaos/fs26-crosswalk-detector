@@ -1,0 +1,10 @@
+*
+!vercel.json
+!web
+!web/**
+web/node_modules
+web/dist
+web/test-artifacts
+web/.vite
+web/.vite-temp
+web/package-lock.json

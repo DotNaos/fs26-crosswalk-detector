@@ -49,7 +49,11 @@ export default [
     ignores: ["dist/**", "node_modules/**"],
   },
   {
-    files: ["src/**/*.{ts,tsx}", "dev.ts", "vite.config.ts"],
+    files: [
+      "src/**/*.{ts,tsx}",
+      "dev.ts",
+      "vite.config.ts",
+    ],
     languageOptions: {
       parser: tsParser,
       parserOptions: {
@@ -67,7 +71,7 @@ export default [
       "loc/soft-max-lines": [
         "warn",
         {
-          max: 500,
+          max: 700,
           label: "Soft file-size limit exceeded",
         },
       ],

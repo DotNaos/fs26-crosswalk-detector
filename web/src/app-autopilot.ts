@@ -1,7 +1,7 @@
 import type { AutopilotPlan } from "./autopilot-planner";
 
-export const FALLBACK_RUN = "real-v1";
-export const FALLBACK_EXPORT = "real-balanced-256";
+export const FALLBACK_RUN = "osm-v2-50k";
+export const FALLBACK_EXPORT = "balanced-50k-v1";
 
 export function needsRealAutopilotPlanRefresh(autopilot: unknown): autopilot is Partial<AutopilotPlan> {
   const plan = autopilot as Partial<AutopilotPlan> | undefined;

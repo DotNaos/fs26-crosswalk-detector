@@ -30,7 +30,8 @@ function commandExists(name: string) {
 }
 
 function startClient(): Subprocess {
-  return Bun.spawn(["bun", "run", "dev:client"], {
+  const apiTarget = process.env.CROSSWALK_REVIEW_API_TARGET ?? "http://127.0.0.1:8787";
+  return Bun.spawn(["env", `CROSSWALK_REVIEW_API_TARGET=${apiTarget}`, "bun", "run", "dev:client"], {
     cwd: WEB_ROOT,
     stdout: "inherit",
     stderr: "inherit",

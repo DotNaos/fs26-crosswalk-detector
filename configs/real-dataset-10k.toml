@@ -1,0 +1,268 @@
+run_name = "real-v2-10k"
+export_name = "balanced-10k-v1"
+target_per_class = 5000
+tile_size_m = 25
+
+[split_ratios]
+train = 0.7
+val = 0.15
+test = 0.15
+
+[selection]
+positive_min_combined = 0.6
+positive_min_road_surface = -0.02
+positive_min_heuristic = 0.5
+negative_max_combined = 0.55
+negative_positive_penalty = 0.35
+
+[[scenes]]
+scene_id = "zurich-nw"
+city = "Zurich"
+split = "train"
+latitude = 47.379294
+longitude = 8.538107
+size_m = 800
+image_px = 2048
+
+[[scenes]]
+scene_id = "zurich-ne"
+city = "Zurich"
+split = "train"
+latitude = 47.379294
+longitude = 8.545293
+size_m = 800
+image_px = 2048
+
+[[scenes]]
+scene_id = "zurich-sw"
+city = "Zurich"
+split = "train"
+latitude = 47.374506
+longitude = 8.538107
+size_m = 800
+image_px = 2048
+
+[[scenes]]
+scene_id = "zurich-se"
+city = "Zurich"
+split = "train"
+latitude = 47.374506
+longitude = 8.545293
+size_m = 800
+image_px = 2048
+
+[[scenes]]
+scene_id = "basel-nw"
+city = "Basel"
+split = "train"
+latitude = 47.561978
+longitude = 7.584984
+size_m = 800
+image_px = 2048
+
+[[scenes]]
+scene_id = "basel-ne"
+city = "Basel"
+split = "train"
+latitude = 47.561978
+longitude = 7.592216
+size_m = 800
+image_px = 2048
+
+[[scenes]]
+scene_id = "basel-sw"
+city = "Basel"
+split = "train"
+latitude = 47.557222
+longitude = 7.584984
+size_m = 800
+image_px = 2048
+
+[[scenes]]
+scene_id = "basel-se"
+city = "Basel"
+split = "train"
+latitude = 47.557222
+longitude = 7.592216
+size_m = 800
+image_px = 2048
+
+[[scenes]]
+scene_id = "bern-nw"
+city = "Bern"
+split = "train"
+latitude = 46.950659
+longitude = 7.443811
+size_m = 800
+image_px = 2048
+
+[[scenes]]
+scene_id = "bern-ne"
+city = "Bern"
+split = "train"
+latitude = 46.950659
+longitude = 7.450989
+size_m = 800
+image_px = 2048
+
+[[scenes]]
+scene_id = "bern-sw"
+city = "Bern"
+split = "train"
+latitude = 46.945341
+longitude = 7.443811
+size_m = 800
+image_px = 2048
+
+[[scenes]]
+scene_id = "bern-se"
+city = "Bern"
+split = "train"
+latitude = 46.945341
+longitude = 7.450989
+size_m = 800
+image_px = 2048
+
+[[scenes]]
+scene_id = "winterthur-nw"
+city = "Winterthur"
+split = "val"
+latitude = 47.501398
+longitude = 8.720502
+size_m = 800
+image_px = 2048
+
+[[scenes]]
+scene_id = "winterthur-ne"
+city = "Winterthur"
+split = "val"
+latitude = 47.501398
+longitude = 8.727698
+size_m = 800
+image_px = 2048
+
+[[scenes]]
+scene_id = "winterthur-sw"
+city = "Winterthur"
+split = "val"
+latitude = 47.496602
+longitude = 8.720502
+size_m = 800
+image_px = 2048
+
+[[scenes]]
+scene_id = "winterthur-se"
+city = "Winterthur"
+split = "val"
+latitude = 47.496602
+longitude = 8.727698
+size_m = 800
+image_px = 2048
+
+[[scenes]]
+scene_id = "lucerne-nw"
+city = "Lucerne"
+split = "val"
+latitude = 47.052853
+longitude = 8.305713
+size_m = 800
+image_px = 2048
+
+[[scenes]]
+scene_id = "lucerne-ne"
+city = "Lucerne"
+split = "val"
+latitude = 47.052853
+longitude = 8.312887
+size_m = 800
+image_px = 2048
+
+[[scenes]]
+scene_id = "lucerne-sw"
+city = "Lucerne"
+split = "val"
+latitude = 47.047547
+longitude = 8.305713
+size_m = 800
+image_px = 2048
+
+[[scenes]]
+scene_id = "lucerne-se"
+city = "Lucerne"
+split = "val"
+latitude = 47.047547
+longitude = 8.312887
+size_m = 800
+image_px = 2048
+
+[[scenes]]
+scene_id = "chur-nw"
+city = "Chur"
+split = "test"
+latitude = 46.853496
+longitude = 9.529319
+size_m = 800
+image_px = 2048
+
+[[scenes]]
+scene_id = "chur-ne"
+city = "Chur"
+split = "test"
+latitude = 46.853496
+longitude = 9.536481
+size_m = 800
+image_px = 2048
+
+[[scenes]]
+scene_id = "chur-sw"
+city = "Chur"
+split = "test"
+latitude = 46.848104
+longitude = 9.529319
+size_m = 800
+image_px = 2048
+
+[[scenes]]
+scene_id = "chur-se"
+city = "Chur"
+split = "test"
+latitude = 46.848104
+longitude = 9.536481
+size_m = 800
+image_px = 2048
+
+[[scenes]]
+scene_id = "st-gallen-nw"
+city = "St. Gallen"
+split = "test"
+latitude = 47.426911
+longitude = 9.373104
+size_m = 800
+image_px = 2048
+
+[[scenes]]
+scene_id = "st-gallen-ne"
+city = "St. Gallen"
+split = "test"
+latitude = 47.426911
+longitude = 9.380296
+size_m = 800
+image_px = 2048
+
+[[scenes]]
+scene_id = "st-gallen-sw"
+city = "St. Gallen"
+split = "test"
+latitude = 47.422089
+longitude = 9.373104
+size_m = 800
+image_px = 2048
+
+[[scenes]]
+scene_id = "st-gallen-se"
+city = "St. Gallen"
+split = "test"
+latitude = 47.422089
+longitude = 9.380296
+size_m = 800
+image_px = 2048
