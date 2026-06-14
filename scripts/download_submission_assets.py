@@ -139,7 +139,7 @@ def safe_extract(archive: tarfile.TarFile, destination: Path) -> None:
         target = (destination / member.name).resolve()
         if root != target and root not in target.parents:
             raise RuntimeError(f"Archive member escapes destination: {member.name}")
-    archive.extractall(destination)
+    archive.extractall(destination, filter="data")
 
 
 if __name__ == "__main__":
