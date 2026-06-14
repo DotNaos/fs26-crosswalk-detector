@@ -78,14 +78,14 @@ def main() -> int:
 
 
 def download_dataset(download_dir: Path, output: Path, *, force: bool) -> None:
-    archive_path = download_dir / DATASET_ARCHIVE
-    download_file(DATASET_URL, archive_path, expected_sha256=DATASET_SHA256, force=force)
-
     target_dataset = output / "sam3-500k-masks-v1"
     target_index = output / "index.json"
     if target_dataset.exists() and target_index.exists() and not force:
         print(f"Dataset already exists: {output}")
         return
+
+    archive_path = download_dir / DATASET_ARCHIVE
+    download_file(DATASET_URL, archive_path, expected_sha256=DATASET_SHA256, force=force)
 
     output.mkdir(parents=True, exist_ok=True)
     with tarfile.open(archive_path, "r:gz") as archive:
