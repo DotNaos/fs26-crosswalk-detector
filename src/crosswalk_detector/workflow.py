@@ -89,6 +89,28 @@ def test_main() -> int:
     _require_default_profile(args.profile)
     _ensure_project_assets(skip_model=False)
     model_root = _resolve(args.model_root)
+    if args.input_dir:
+        from .crossmask_inference import run_crossmask_image_directory
+
+        output_dir = _resolve(args.output_dir)
+        summary = run_crossmask_image_directory(
+            _resolve(args.input_dir),
+            output_dir,
+            model_root,
+            threshold=args.threshold,
+            include_overlays=not args.no_overlays,
+        )
+        print("CrossMaskNet directory test complete")
+        print(f"Input images: {summary['total']}")
+        print(f"Positive: {summary['positive']}")
+        print(f"Negative: {summary['negative']}")
+        print(f"Positive images: {summary['positive_dir']}")
+        print(f"Negative images: {summary['negative_dir']}")
+        if not args.no_overlays:
+            print(f"Positive overlays: {summary['positive_overlays_dir']}")
+        print(f"Summary: {output_dir / 'summary.json'}")
+        return 0
+
     metrics_path = model_root / "metrics.json"
     if not metrics_path.exists():
         raise FileNotFoundError(f"Missing model metrics: {metrics_path}")
@@ -159,6 +181,10 @@ def _test_parser(add_help: bool = True) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="test", add_help=add_help)
     parser.add_argument("--profile", default="default")
     parser.add_argument("--model-root", type=Path, default=DEFAULT_MODEL)
+    parser.add_argument("--input-dir", type=Path, default=None)
+    parser.add_argument("--output-dir", type=Path, default=Path("data/predictions/crossmask-test"))
+    parser.add_argument("--threshold", type=float, default=0.005)
+    parser.add_argument("--no-overlays", action="store_true")
     return parser
 
 

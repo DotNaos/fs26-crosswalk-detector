@@ -86,6 +86,7 @@ uv run train --skip-raw-cache --positive-limit 20 --negative-ratio 1 \
   --model-output /tmp/crosswalk-model-smoke \
   --rebuild-export
 uv run test --model-root models/crossmask/sam3-500k-road-channel-v4
+uv run test --input-dir path/to/images --output-dir data/predictions/my-run
 ```
 
 The workflow has three commands:
@@ -94,7 +95,7 @@ The workflow has three commands:
 |---|---|
 | `uv run dataset` | Downloads the public dataset metadata if needed, downloads the required raw aerial scenes, and prepares the local training images and masks. |
 | `uv run train` | Ensures the dataset exists, then trains CrossMaskNet and writes a checkpoint plus metrics. |
-| `uv run test` | Downloads the public checkpoint if needed and prints the stored test metrics for the default model. |
+| `uv run test` | Downloads the public checkpoint if needed and prints the stored test metrics for the default model. With `--input-dir`, it classifies new images into output folders. |
 
 SAM3 is only needed if you want to run the labeling pipeline yourself. The
 normal `dataset`, `train`, and `test` commands use the released labels and do
@@ -109,6 +110,10 @@ All options are optional. If you omit them, the commands use these defaults:
 | `--export` | `data/processed/crossmask/sam3-500k-road-channel-v4` | Where `dataset` writes prepared training images and masks, and where `train` reads them. |
 | `--model-output` | `models/crossmask/sam3-500k-road-channel-v4` | Where `train` writes model checkpoints and metrics. |
 | `--model-root` | `models/crossmask/sam3-500k-road-channel-v4` | Where `test` reads model checkpoints and metrics. |
+| `--input-dir` | not set | Folder of new images for `test` to classify. Supports common image files such as JPG and PNG. |
+| `--output-dir` | `data/predictions/crossmask-test` | Where `test --input-dir` writes classified images, overlays, and summary files. |
+| `--threshold` | `0.005` | Mask coverage required for `test --input-dir` to classify an image as positive. |
+| `--no-overlays` | off | Skips writing overlay images for positive predictions. |
 | `--epochs` | `8` | Number of full passes over the training data. `8` means the model sees the prepared training set eight times. |
 | `--batch-size` | `64` | Number of image/mask pairs processed in one training step. Use `16` or `32` if the machine runs out of memory. |
 | `--image-size` | `128` | Training crop size. `128` means each crop is resized to 128 x 128 pixels. |
@@ -136,6 +141,22 @@ missing, `train` prepares it first and then trains CrossMaskNet.
 
 `uv run test` restores the public model checkpoint if needed and prints the
 stored held-out test metrics for the default model.
+
+To classify new image files, put them in one folder and run:
+
+```bash
+uv run test --input-dir path/to/images --output-dir data/predictions/my-run
+```
+
+This writes:
+
+| Output | Content |
+|---|---|
+| `positive/` | Images classified as crosswalk. |
+| `negative/` | Images classified as no-crosswalk. |
+| `positive_overlays/` | Positive images with the predicted mask drawn on top. |
+| `summary.json` | Full machine-readable run summary. |
+| `predictions.csv` | Compact table of image paths, decisions, and scores. |
 
 Useful training options:
 
