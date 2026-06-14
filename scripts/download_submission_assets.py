@@ -6,9 +6,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 from pathlib import Path
-import shutil
 import tarfile
 import tempfile
+from time import monotonic
 from urllib.request import urlopen
 
 
@@ -71,9 +71,9 @@ def main() -> int:
         if cleanup:
             cleanup.cleanup()
 
-    print("Project assets are ready.")
-    print(f"Dataset: {dataset_output}")
-    print(f"Model:   {model_output}")
+    print("Project assets are ready.", flush=True)
+    print(f"Dataset: {dataset_output}", flush=True)
+    print(f"Model:   {model_output}", flush=True)
     return 0
 
 
@@ -81,16 +81,17 @@ def download_dataset(download_dir: Path, output: Path, *, force: bool) -> None:
     target_dataset = output / "sam3-500k-masks-v1"
     target_index = output / "index.json"
     if target_dataset.exists() and target_index.exists() and not force:
-        print(f"Dataset already exists: {output}")
+        print(f"Dataset already exists: {output}", flush=True)
         return
 
     archive_path = download_dir / DATASET_ARCHIVE
     download_file(DATASET_URL, archive_path, expected_sha256=DATASET_SHA256, force=force)
 
     output.mkdir(parents=True, exist_ok=True)
+    print(f"Extracting dataset metadata to {output}", flush=True)
     with tarfile.open(archive_path, "r:gz") as archive:
         safe_extract(archive, output)
-    print(f"Extracted dataset metadata to {output}")
+    print(f"Extracted dataset metadata to {output}", flush=True)
 
 
 def download_model(download_dir: Path, output: Path, *, force: bool) -> None:
@@ -99,7 +100,7 @@ def download_model(download_dir: Path, output: Path, *, force: bool) -> None:
         target = output / name
         if target.exists() and not force:
             verify_sha256(target, expected_hash)
-            print(f"Model asset already exists: {target}")
+            print(f"Model asset already exists: {target}", flush=True)
             continue
         download_file(f"{MODEL_RELEASE}/{name}", target, expected_sha256=expected_hash, force=True)
 
@@ -110,17 +111,30 @@ def download_model(download_dir: Path, output: Path, *, force: bool) -> None:
 def download_file(url: str, target: Path, *, expected_sha256: str, force: bool) -> None:
     if target.exists() and not force:
         verify_sha256(target, expected_sha256)
-        print(f"Download already exists: {target}")
+        print(f"Download already exists: {target}", flush=True)
         return
 
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_suffix(target.suffix + ".download")
-    print(f"Downloading {url}")
+    print(f"Downloading {url}", flush=True)
     with urlopen(url) as response, temporary.open("wb") as output:
-        shutil.copyfileobj(response, output)
+        total_bytes = int(response.headers.get("Content-Length") or 0)
+        downloaded = 0
+        last_report = monotonic()
+        while True:
+            chunk = response.read(1024 * 1024)
+            if not chunk:
+                break
+            output.write(chunk)
+            downloaded += len(chunk)
+            now = monotonic()
+            if now - last_report >= 1.0:
+                print(f"  {_format_bytes(downloaded)} / {_format_bytes(total_bytes)}", flush=True)
+                last_report = now
+        print(f"  {_format_bytes(downloaded)} / {_format_bytes(total_bytes)}", flush=True)
     verify_sha256(temporary, expected_sha256)
     temporary.replace(target)
-    print(f"Saved {target}")
+    print(f"Saved {target}", flush=True)
 
 
 def verify_sha256(path: Path, expected: str) -> None:
@@ -140,6 +154,12 @@ def safe_extract(archive: tarfile.TarFile, destination: Path) -> None:
         if root != target and root not in target.parents:
             raise RuntimeError(f"Archive member escapes destination: {member.name}")
     archive.extractall(destination, filter="data")
+
+
+def _format_bytes(value: int) -> str:
+    if value <= 0:
+        return "unknown"
+    return f"{value / (1024 * 1024):.1f} MB"
 
 
 if __name__ == "__main__":
