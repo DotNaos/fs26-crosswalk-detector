@@ -47,51 +47,35 @@ Large datasets, generated masks, logs, and model checkpoints should normally sta
 
 ## Quick Start
 
-Clone the repository:
+Requirements: `git` and `uv` must already be installed.
+
+Copy and paste this into PowerShell, macOS Terminal, or a Linux terminal:
 
 ```bash
 git clone https://github.com/DotNaos/fs26-crosswalk-detector.git
 cd fs26-crosswalk-detector
-```
-
-Using `uv` (recommended):
-
-```bash
 uv sync
 uv run download-images --count 20 --positive-ratio 0.5 --output-dir data/input/crossmask-images
-uv run test --input-dir data/input/crossmask-images --output-dir data/predictions/my-run --positive-threshold 0.005
-uv run dataset
-uv run train
-uv run test
+uv run test --input-dir data/input/crossmask-images --output-dir data/predictions/release-check --positive-threshold 0.005
 ```
 
-Using Python:
+This creates:
+
+| Path | Content |
+|---|---|
+| `data/input/crossmask-images/` | 20 downloaded example images: 10 source-positive and 10 source-negative. |
+| `data/predictions/release-check/positive/` | Images classified as crosswalk by the released checkpoint. |
+| `data/predictions/release-check/negative/` | Images classified as no-crosswalk by the released checkpoint. |
+| `data/predictions/release-check/positive_overlays/` | Positive images with the predicted mask drawn on top. |
+| `data/predictions/release-check/summary.json` | Full machine-readable run summary. |
+| `data/predictions/release-check/predictions.csv` | Compact table of image paths, decisions, and scores. |
+
+To train a fresh model and test that exact model, run this after setup:
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -e .
-python -m crosswalk_detector.workflow download-images --count 20 --positive-ratio 0.5 --output-dir data/input/crossmask-images
-python -m crosswalk_detector.workflow test --input-dir data/input/crossmask-images --output-dir data/predictions/my-run --positive-threshold 0.005
-python -m crosswalk_detector.workflow dataset
-python -m crosswalk_detector.workflow train
-python -m crosswalk_detector.workflow test
-```
-
-Common options:
-
-```bash
-uv run train --epochs 8 --batch-size 64
-uv run dataset --skip-raw-cache --positive-limit 20 --negative-ratio 1 \
-  --export /tmp/crosswalk-dataset-smoke --rebuild-export
-uv run train --skip-raw-cache --positive-limit 20 --negative-ratio 1 \
-  --epochs 1 --batch-size 2 \
-  --export /tmp/crosswalk-train-smoke \
-  --model-output /tmp/crosswalk-model-smoke \
-  --rebuild-export
-uv run test --model-root models/crossmask/sam3-500k-road-channel-v4
-uv run test --input-dir path/to/images --output-dir data/predictions/my-run --positive-threshold 0.005
-uv run download-images --count 20 --positive-ratio 0.5 --output-dir data/input/demo-images
+uv run train --model-output models/crossmask/local-run
+uv run test --model-root models/crossmask/local-run
+uv run test --model-root models/crossmask/local-run --input-dir data/input/crossmask-images --output-dir data/predictions/local-run --positive-threshold 0.005
 ```
 
 The normal workflow commands are:

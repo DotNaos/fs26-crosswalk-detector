@@ -117,8 +117,9 @@ def train_main() -> int:
 def test_main() -> int:
     args = _test_parser().parse_args()
     _require_default_profile(args.profile)
-    _ensure_project_assets(skip_model=False)
     model_root = _resolve(args.model_root)
+    if _uses_default_model_root(model_root) and not _model_files_exist(model_root):
+        _ensure_project_assets(skip_model=False)
     if args.input_dir:
         from .crossmask_inference import run_crossmask_image_directory
 
@@ -252,6 +253,14 @@ def _ensure_project_assets(*, skip_model: bool) -> None:
     if skip_model:
         command.append("--skip-model")
     subprocess.run(command, cwd=REPO_ROOT, check=True)
+
+
+def _uses_default_model_root(model_root: Path) -> bool:
+    return model_root == _resolve(DEFAULT_MODEL)
+
+
+def _model_files_exist(model_root: Path) -> bool:
+    return (model_root / "metrics.json").exists() and (model_root / "crossmasknet_best.pt").exists()
 
 
 def _prepare_dataset(
