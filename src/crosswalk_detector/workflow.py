@@ -49,29 +49,16 @@ def download_images_main() -> int:
     _stage("Checking project assets...", enabled=not args.no_progress)
     _ensure_project_assets(skip_model=True)
 
-    from .input_images import download_input_images
-
     output_dir = _resolve(args.output_dir)
     positive_count, negative_count = _image_counts(args.count, args.positive_ratio, args.positive_count, args.negative_count)
-    _stage(f"Preparing {positive_count + negative_count} input image(s): {output_dir}", enabled=not args.no_progress)
-    summary = download_input_images(
-        _resolve(args.dataset),
+    summary = _prepare_input_images(
+        args,
         output_dir,
         positive_count=positive_count,
         negative_count=negative_count,
-        image_size=args.image_size,
-        seed=args.seed,
-        min_confidence=args.min_confidence,
-        min_mask_coverage=args.min_mask_coverage,
         overwrite=args.overwrite,
-        show_progress=not args.no_progress,
     )
-    print("Input images ready")
-    print(f"Images: {summary['total']}")
-    print(f"Positive source examples: {summary['positive']}")
-    print(f"Negative source examples: {summary['negative']}")
-    print(f"Input directory: {output_dir}")
-    print(f"Manifest: {summary['manifest']}")
+    _print_input_summary(summary, output_dir)
     return 0
 
 
@@ -126,16 +113,32 @@ def test_main() -> int:
     args = _test_parser().parse_args()
     _require_default_profile(args.profile)
     model_root = _resolve(args.model_root)
-    if _uses_default_model_root(model_root) and not _model_files_exist(model_root):
+    needs_release_model = _uses_default_model_root(model_root) and not _model_files_exist(model_root)
+    should_download_inputs = args.input_dir is None and not args.metrics_only
+    if needs_release_model or should_download_inputs:
         _stage("Checking project assets...", enabled=not args.no_progress)
-        _ensure_project_assets(skip_model=False)
-    if args.input_dir:
+        _ensure_project_assets(skip_model=not needs_release_model)
+    if not args.metrics_only:
         from .crossmask_inference import run_crossmask_image_directory
 
+        if args.input_dir:
+            input_dir = _resolve(args.input_dir)
+        else:
+            input_dir = _resolve(args.download_dir)
+            positive_count, negative_count = _image_counts(args.count, args.positive_ratio, args.positive_count, args.negative_count)
+            summary = _prepare_input_images(
+                args,
+                input_dir,
+                positive_count=positive_count,
+                negative_count=negative_count,
+                overwrite=True,
+            )
+            _print_input_summary(summary, input_dir)
+
         output_dir = _resolve(args.output_dir)
-        _stage(f"Testing image directory: {_resolve(args.input_dir)}", enabled=not args.no_progress)
+        _stage(f"Testing image directory: {input_dir}", enabled=not args.no_progress)
         summary = run_crossmask_image_directory(
-            _resolve(args.input_dir),
+            input_dir,
             output_dir,
             model_root,
             threshold=args.positive_threshold,
@@ -250,7 +253,17 @@ def _test_parser(add_help: bool = True) -> argparse.ArgumentParser:
     parser.add_argument("--profile", default="default", help="Prepared project configuration.")
     parser.add_argument("--model-root", type=Path, default=DEFAULT_MODEL, help="Model checkpoint and metrics directory.")
     parser.add_argument("--input-dir", type=Path, default=None, help="Folder of new images to classify.")
+    parser.add_argument("--download-dir", type=Path, default=DEFAULT_INPUT_IMAGES, help="Where test downloads input images when --input-dir is omitted.")
     parser.add_argument("--output-dir", type=Path, default=Path("data/predictions/crossmask-test"), help="Where classified outputs are written.")
+    parser.add_argument("--count", type=int, default=20, help="Total number of input images to download when --input-dir is omitted.")
+    parser.add_argument("--positive-ratio", type=float, default=0.5, help="Share of downloaded images that should come from positive source examples.")
+    parser.add_argument("--positive-count", type=int, default=None, help="Explicit positive image count for automatic test input download.")
+    parser.add_argument("--negative-count", type=int, default=None, help="Explicit negative image count for automatic test input download.")
+    parser.add_argument("--image-size", type=int, default=128, help="Downloaded input image size in pixels.")
+    parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET, help="Metadata dataset location for automatic input download.")
+    parser.add_argument("--min-confidence", type=float, default=0.4, help="Minimum source-label confidence for downloaded positive examples.")
+    parser.add_argument("--min-mask-coverage", type=float, default=0.01, help="Minimum source mask coverage for downloaded positive examples.")
+    parser.add_argument("--seed", type=int, default=7, help="Repeatable sampling seed for automatic input download.")
     parser.add_argument(
         "--positive-threshold",
         "--threshold",
@@ -260,6 +273,7 @@ def _test_parser(add_help: bool = True) -> argparse.ArgumentParser:
         help="Minimum mask coverage for positive. Images below this value are negative.",
     )
     parser.add_argument("--no-overlays", action="store_true", help="Do not write positive overlay images.")
+    parser.add_argument("--metrics-only", action="store_true", help="Only print stored model metrics. Do not download or classify input images.")
     parser.add_argument("--no-progress", action="store_true", help="Disable live progress output.")
     return parser
 
@@ -341,6 +355,40 @@ def _require_default_profile(profile: str) -> None:
 def _stage(message: str, *, enabled: bool = True) -> None:
     if enabled:
         print(message, flush=True)
+
+
+def _prepare_input_images(
+    args: argparse.Namespace,
+    output_dir: Path,
+    *,
+    positive_count: int,
+    negative_count: int,
+    overwrite: bool,
+) -> dict[str, Any]:
+    from .input_images import download_input_images
+
+    _stage(f"Preparing {positive_count + negative_count} input image(s): {output_dir}", enabled=not args.no_progress)
+    return download_input_images(
+        _resolve(args.dataset),
+        output_dir,
+        positive_count=positive_count,
+        negative_count=negative_count,
+        image_size=args.image_size,
+        seed=args.seed,
+        min_confidence=args.min_confidence,
+        min_mask_coverage=args.min_mask_coverage,
+        overwrite=overwrite,
+        show_progress=not args.no_progress,
+    )
+
+
+def _print_input_summary(summary: dict[str, Any], output_dir: Path) -> None:
+    print("Input images ready")
+    print(f"Images: {summary['total']}")
+    print(f"Positive source examples: {summary['positive']}")
+    print(f"Negative source examples: {summary['negative']}")
+    print(f"Input directory: {output_dir}")
+    print(f"Manifest: {summary['manifest']}")
 
 
 def _image_counts(count: int, positive_ratio: float, positive_count: int | None, negative_count: int | None) -> tuple[int, int]:

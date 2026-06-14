@@ -55,8 +55,7 @@ Copy and paste this into PowerShell, macOS Terminal, or a Linux terminal:
 git clone https://github.com/DotNaos/fs26-crosswalk-detector.git
 cd fs26-crosswalk-detector
 uv sync
-uv run download-images --count 20 --positive-ratio 0.5 --output-dir data/input/crossmask-images
-uv run test --input-dir data/input/crossmask-images --output-dir data/predictions/release-check --positive-threshold 0.005
+uv run test --count 20 --positive-ratio 0.5 --output-dir data/predictions/release-check --positive-threshold 0.005
 ```
 
 This creates:
@@ -74,8 +73,7 @@ To train a fresh model and test that exact model, run this after setup:
 
 ```bash
 uv run train
-uv run test --model-root models/crossmask/local-run
-uv run test --model-root models/crossmask/local-run --input-dir data/input/crossmask-images --output-dir data/predictions/local-run --positive-threshold 0.005
+uv run test --model-root models/crossmask/local-run --count 20 --output-dir data/predictions/local-run --positive-threshold 0.005
 ```
 
 The default training run is intentionally small. It shows progress, writes
@@ -86,11 +84,10 @@ For a larger run, increase the training options:
 uv run train --positive-limit 2500 --epochs 8 --batch-size 64 --base-channels 24 --num-workers 2 --max-train-seconds 0 --prefetch-raw-cache
 ```
 
-To test more input images, download a larger input folder and point `test` at it:
+To test more input images, increase `--count`:
 
 ```bash
-uv run download-images --count 200 --positive-ratio 0.5 --output-dir data/input/crossmask-images-200
-uv run test --input-dir data/input/crossmask-images-200 --output-dir data/predictions/release-check-200 --positive-threshold 0.005
+uv run test --count 200 --positive-ratio 0.5 --output-dir data/predictions/release-check-200 --positive-threshold 0.005
 ```
 
 The normal workflow commands are:
@@ -100,7 +97,7 @@ The normal workflow commands are:
 | `uv run download-images` | Downloads a small folder of example input images that can be passed to `test --input-dir`. |
 | `uv run dataset` | Downloads the public dataset metadata if needed, downloads the required raw aerial scenes, and prepares the local training images and masks. |
 | `uv run train` | Ensures the dataset exists, then trains CrossMaskNet and writes a checkpoint plus metrics. |
-| `uv run test` | Downloads the public checkpoint if needed and prints the stored test metrics for the default model. With `--input-dir`, it classifies new images into output folders. |
+| `uv run test` | Downloads the public checkpoint and example input images if needed, then classifies images into output folders. With `--metrics-only`, it only prints stored model metrics. |
 
 SAM3 is only needed if you want to run the labeling pipeline yourself. The
 normal `dataset`, `train`, and `test` commands use the released labels and do
@@ -115,13 +112,14 @@ All options are optional. If you omit them, the commands use these defaults:
 | `--export` | `data/processed/crossmask/local-run` for `train`; `data/processed/crossmask/sam3-500k-road-channel-v4` for `dataset` | Where prepared training images and masks are written. |
 | `--model-output` | `models/crossmask/local-run` | Where `train` writes model checkpoints and metrics. |
 | `--model-root` | `models/crossmask/sam3-500k-road-channel-v4` | Where `test` reads model checkpoints and metrics. |
-| `--input-dir` | not set | Folder of new images for `test` to classify. Supports common image files such as JPG and PNG. |
-| `--output-dir` | `data/predictions/crossmask-test` | Where `test --input-dir` writes classified images, overlays, and summary files. |
-| `--positive-threshold` | `0.005` | Minimum mask coverage for `test --input-dir` to classify an image as `positive`. Images below this value go to `negative/`. Lower values put more images in `positive/`; higher values put more images in `negative/`. |
+| `--input-dir` | not set | Folder of your own images for `test` to classify. If omitted, `test` downloads example images automatically. |
+| `--download-dir` | `data/input/crossmask-images` | Where `test` writes automatically downloaded input images. |
+| `--output-dir` | `data/predictions/crossmask-test` | Where `test` writes classified images, overlays, and summary files. |
+| `--positive-threshold` | `0.005` | Minimum mask coverage for `test` to classify an image as `positive`. Images below this value go to `negative/`. Lower values put more images in `positive/`; higher values put more images in `negative/`. |
 | `--no-overlays` | off | Skips writing overlay images for positive predictions. |
-| `--count` | `20` | Total number of example images written by `download-images`. |
+| `--count` | `20` | Total number of example images downloaded by `test` when `--input-dir` is omitted, or by `download-images`. |
 | `--positive-ratio` | `0.5` | Share of downloaded examples that come from positive source labels. `0.5` with `--count 20` means 10 positive and 10 negative examples. |
-| `--positive-count` / `--negative-count` | not set | Explicit class counts for `download-images` if you do not want to use `--count` and `--positive-ratio`. |
+| `--positive-count` / `--negative-count` | not set | Explicit class counts for downloaded examples if you do not want to use `--count` and `--positive-ratio`. |
 | `--epochs` | `1` | Number of full passes over the training data. Increase this for a stronger run. |
 | `--batch-size` | `4` | Number of image/mask pairs processed in one training step. Increase this on stronger machines. |
 | `--image-size` | `128` | Training crop size. `128` means each crop is resized to 128 x 128 pixels. |
@@ -139,6 +137,7 @@ All options are optional. If you omit them, the commands use these defaults:
 | `--skip-raw-cache` | on for `train`; off for `dataset` | Skips the full scene prefetch and downloads only scenes needed while building the export. |
 | `--prefetch-raw-cache` | off | For `train`, downloads the raw scene cache before building the export. This is slower but useful for larger runs. |
 | `--no-progress` | off | Disables live progress output during `download-images`, `train`, or `test --input-dir`. |
+| `--metrics-only` | off | For `test`, prints stored model metrics without downloading or classifying images. |
 | `--rebuild-export` | off | Recreates the prepared dataset export even if it already exists. |
 | `--seed` | `7` | Keeps the train/test split and sampling repeatable. |
 
@@ -159,8 +158,8 @@ During training, checkpoints are written to the model output folder:
 | `crossmasknet_best.pt` | Best checkpoint selected from the run. |
 | `metrics.json` | Metrics, settings, and checkpoint paths for the run. |
 
-`uv run test` restores the public model checkpoint if needed and prints the
-stored held-out test metrics for the default model.
+`uv run test` restores the public model checkpoint if needed, downloads input
+images when `--input-dir` is omitted, and classifies those images.
 
 To classify new image files, put them in one folder and run:
 
@@ -171,7 +170,7 @@ uv run test --input-dir path/to/images --output-dir data/predictions/my-run --po
 `test` copies input images into the output folders. It does not move or delete
 the original files in `--input-dir`.
 
-If you need a ready-made input folder first, run:
+If you want to only create an input folder without running the model, run:
 
 ```bash
 uv run download-images --count 20 --positive-ratio 0.5 --output-dir data/input/crossmask-images
