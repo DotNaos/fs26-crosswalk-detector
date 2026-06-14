@@ -297,3 +297,11 @@ The root `vercel.json` is required because the web app lives in `web/`, while th
 - Static dataset deployment: `docs/static-dataset-deployment.md`
 - SAM3 dataset data model: `docs/sam3-100k-data-model.md`
 - SAM3 runbook: `docs/sam3-100k-runbook.md`
+
+## AI Assistance
+
+OpenAI Codex was used as a development and documentation assistant for this
+project. It supported code implementation, debugging, command-line workflow
+cleanup, documentation structure, and wording. The project decisions, final
+model selection, verification runs, and submitted results remain the author's
+responsibility.
