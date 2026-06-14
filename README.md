@@ -32,8 +32,6 @@ The latest measured test results for CrossMaskNet v4 are:
 | Positive Dice | `0.794408` |
 | Positive IoU | `0.658937` |
 
-These results are measured against the generated held-out test split. A human-reviewed validation subset is still recommended before making strong real-world accuracy claims.
-
 ## Repository Structure
 
 - `src/crosswalk_detector/`: Python training, inference, dataset, and pipeline code
@@ -47,13 +45,122 @@ These results are measured against the generated held-out test split. A human-re
 
 Large datasets, generated masks, logs, and model checkpoints should normally stay out of Git. The compressed static dataset metadata used by the deployed frontend lives under `web/public/static-datasets/`.
 
+## Quick Start
+
+Clone the repository:
+
+```bash
+git clone https://github.com/DotNaos/fs26-crosswalk-detector.git
+cd fs26-crosswalk-detector
+```
+
+Using `uv` (recommended):
+
+```bash
+uv sync
+uv run dataset
+uv run train
+uv run test
+```
+
+Using Python:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e .
+python -m crosswalk_detector.workflow dataset
+python -m crosswalk_detector.workflow train
+python -m crosswalk_detector.workflow test
+```
+
+Common options:
+
+```bash
+uv run train --epochs 8 --batch-size 64
+uv run dataset --skip-raw-cache --positive-limit 20 --negative-ratio 1 \
+  --export /tmp/crosswalk-dataset-smoke --rebuild-export
+uv run train --skip-raw-cache --positive-limit 20 --negative-ratio 1 \
+  --epochs 1 --batch-size 2 \
+  --export /tmp/crosswalk-train-smoke \
+  --model-output /tmp/crosswalk-model-smoke \
+  --rebuild-export
+uv run test --model-root models/crossmask/sam3-500k-road-channel-v4
+```
+
+The workflow has three commands:
+
+| Command | What it does |
+|---|---|
+| `uv run dataset` | Downloads the public dataset metadata if needed, downloads the required raw aerial scenes, and prepares the local training images and masks. |
+| `uv run train` | Ensures the dataset exists, then trains CrossMaskNet and writes a checkpoint plus metrics. |
+| `uv run test` | Downloads the public checkpoint if needed and prints the stored test metrics for the default model. |
+
+SAM3 is only needed if you want to run the labeling pipeline yourself. The
+normal `dataset`, `train`, and `test` commands use the released labels and do
+not require SAM3.
+
+All options are optional. If you omit them, the commands use these defaults:
+
+| Option | Default | What it means |
+|---|---|---|
+| `--profile` | `default` | Selects the prepared project configuration. |
+| `--dataset` | `web/public/static-datasets/sam3-500k-masks-v1` | Metadata dataset location for `dataset` and `train`. |
+| `--export` | `data/processed/crossmask/sam3-500k-road-channel-v4` | Where `dataset` writes prepared training images and masks, and where `train` reads them. |
+| `--model-output` | `models/crossmask/sam3-500k-road-channel-v4` | Where `train` writes model checkpoints and metrics. |
+| `--model-root` | `models/crossmask/sam3-500k-road-channel-v4` | Where `test` reads model checkpoints and metrics. |
+| `--epochs` | `8` | Number of full passes over the training data. `8` means the model sees the prepared training set eight times. |
+| `--batch-size` | `64` | Number of image/mask pairs processed in one training step. Use `16` or `32` if the machine runs out of memory. |
+| `--image-size` | `128` | Training crop size. `128` means each crop is resized to 128 x 128 pixels. |
+| `--limit-scenes` | no limit | Limits the raw scene prefetch step. The export can still download a missing scene later if it needs it. |
+| `--positive-limit` | `2500` | Maximum number of crosswalk examples used when preparing the local training export. |
+| `--negative-ratio` | `1.0` | Number of no-crosswalk examples per crosswalk example. `1.0` means a balanced export. |
+| `--min-confidence` | `0.4` | Minimum released label confidence accepted for training examples. |
+| `--min-mask-coverage` | `0.01` | Minimum mask area required for a positive crosswalk example. |
+| `--workers` | `4` | Parallel download workers for raw aerial scenes. |
+| `--num-workers` | `2` | Data-loading workers used while training. |
+| `--learning-rate` | `0.001` | Training step size for the optimizer. |
+| `--base-channels` | `24` | Width of the CrossMaskNet feature layers. Larger values make the model heavier. |
+| `--road-channel` | off | Adds a road-context input channel during training. |
+| `--skip-raw-cache` | off | Skips the full scene prefetch and downloads only scenes needed while building the export. |
+| `--rebuild-export` | off | Recreates the prepared dataset export even if it already exists. |
+| `--seed` | `7` | Keeps the train/test split and sampling repeatable. |
+
+The raw image cache is written to `data/raw/sam3-500k-masks-v1/wms-mosaics/`.
+
+`uv run dataset` restores the public dataset metadata if needed, caches the raw
+swisstopo scene images locally, and prepares the training export.
+
+`uv run train` reuses the prepared export when it already exists. If it is
+missing, `train` prepares it first and then trains CrossMaskNet.
+
+`uv run test` restores the public model checkpoint if needed and prints the
+stored held-out test metrics for the default model.
+
+Useful training options:
+
+```bash
+uv run train --epochs 8 --batch-size 64
+uv run train --skip-raw-cache --positive-limit 20 --negative-ratio 1 \
+  --epochs 1 --batch-size 2 \
+  --export /tmp/crosswalk-train-smoke \
+  --model-output /tmp/crosswalk-model-smoke \
+  --rebuild-export
+```
+
+The second command is a small smoke run. It checks the download, dataset export,
+and training path without building the full default dataset.
+
+All generated data stays in local ignored folders such as `data/` and `models/`.
+The raw aerial images are not committed to Git.
+
 ## Local Development
 
 Python dependencies are managed with `uv`.
 
 ```bash
 uv sync
-uv run pytest
+uv run --with pytest python -m pytest
 ```
 
 The frontend lives in `web/` and uses Bun.
@@ -71,7 +178,7 @@ cd web
 VITE_CROSSWALK_STATIC_ONLY=1 bun run build
 ```
 
-## Download Submission Assets
+## Download Project Assets
 
 The larger dataset metadata package and the trained model checkpoint are stored
 as GitHub Release assets, not in git.
@@ -85,6 +192,22 @@ This downloads:
 - static 500k dataset metadata to `web/public/static-datasets/`;
 - CrossMaskNet v4 checkpoint and metrics to
   `models/crossmask/sam3-500k-road-channel-v4/`.
+
+The raw aerial images are intentionally not stored in Git or in the release
+archive. They are downloaded reproducibly from swisstopo when a training export
+needs them. To prefetch the raw scene cache before preparing or testing a
+training run:
+
+```bash
+uv run crosswalk-pipeline download-raw-scenes \
+  --dataset web/public/static-datasets/sam3-500k-masks-v1
+```
+
+For the 500k metadata dataset this caches 489 source scenes under
+`data/raw/sam3-500k-masks-v1/wms-mosaics/`. A five-scene measurement on the
+current WMS source estimates this cache at about 641 MiB. Storing the same
+coverage as 500k separate 25m image requests would be much larger, around
+7.7 GiB from the same sample.
 
 Release links:
 
@@ -111,9 +234,3 @@ The root `vercel.json` is required because the web app lives in `web/`, while th
 - Static dataset deployment: `docs/static-dataset-deployment.md`
 - SAM3 dataset data model: `docs/sam3-100k-data-model.md`
 - SAM3 runbook: `docs/sam3-100k-runbook.md`
-
-## Notes
-
-- Do not commit large raw datasets, generated model runs, or private machine-specific artifacts.
-- Keep project decisions and important experiment results documented in `docs/`.
-- The final report should clearly state that SAM3 generated pseudo-labels, while CrossMaskNet is the submitted custom model.

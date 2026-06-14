@@ -1,0 +1,227 @@
+"""Simple workflow commands for training and testing."""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+import subprocess
+import sys
+from typing import Any
+
+from .raw_imagery import download_dataset_scenes
+from .train_crossmask import prepare_crossmask_export, train_crossmask
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_DATASET = Path("web/public/static-datasets/sam3-500k-masks-v1")
+DEFAULT_EXPORT = Path("data/processed/crossmask/sam3-500k-road-channel-v4")
+DEFAULT_MODEL = Path("models/crossmask/sam3-500k-road-channel-v4")
+
+
+def dataset_main() -> int:
+    args = _dataset_parser().parse_args()
+    _require_default_profile(args.profile)
+    dataset_root = _resolve(args.dataset)
+    export_root = _resolve(args.export)
+    _prepare_dataset(
+        dataset_root,
+        export_root,
+        limit_scenes=args.limit_scenes,
+        workers=args.workers,
+        positive_limit=args.positive_limit,
+        negative_ratio=args.negative_ratio,
+        min_confidence=args.min_confidence,
+        min_mask_coverage=args.min_mask_coverage,
+        image_size=args.image_size,
+        seed=args.seed,
+        rebuild_export=args.rebuild_export,
+        skip_raw_cache=args.skip_raw_cache,
+    )
+    return 0
+
+
+def train_main() -> int:
+    args = _train_parser().parse_args()
+    _require_default_profile(args.profile)
+    dataset_root = _resolve(args.dataset)
+    export_root = _resolve(args.export)
+    model_root = _resolve(args.model_output)
+
+    _prepare_dataset(
+        dataset_root,
+        export_root,
+        limit_scenes=args.limit_scenes,
+        workers=args.workers,
+        positive_limit=args.positive_limit,
+        negative_ratio=args.negative_ratio,
+        min_confidence=args.min_confidence,
+        min_mask_coverage=args.min_mask_coverage,
+        image_size=args.image_size,
+        seed=args.seed,
+        rebuild_export=args.rebuild_export,
+        skip_raw_cache=args.skip_raw_cache,
+    )
+
+    metrics = train_crossmask(
+        export_root,
+        model_root,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        learning_rate=args.learning_rate,
+        image_size=args.image_size,
+        base_channels=args.base_channels,
+        input_channels=4 if args.road_channel else 3,
+        road_channel=args.road_channel,
+        num_workers=args.num_workers,
+        seed=args.seed,
+    )
+    print(
+        f"Training complete: accuracy={metrics['test']['image_accuracy']:.6f}, "
+        f"recall={metrics['test']['image_recall']:.6f}, "
+        f"positive_dice={metrics['test']['positive_dice']:.6f}"
+    )
+    print(f"Model: {metrics['model_path']}")
+    return 0
+
+
+def test_main() -> int:
+    args = _test_parser().parse_args()
+    _require_default_profile(args.profile)
+    _ensure_project_assets(skip_model=False)
+    model_root = _resolve(args.model_root)
+    metrics_path = model_root / "metrics.json"
+    if not metrics_path.exists():
+        raise FileNotFoundError(f"Missing model metrics: {metrics_path}")
+    metrics = json.loads(metrics_path.read_text(encoding="utf8"))
+    test_metrics: dict[str, Any] = metrics.get("test", {})
+    print("CrossMaskNet test metrics")
+    print(f"Accuracy: {test_metrics.get('image_accuracy')}")
+    print(f"Precision: {test_metrics.get('image_precision')}")
+    print(f"Recall: {test_metrics.get('image_recall')}")
+    print(f"Positive Dice: {test_metrics.get('positive_dice')}")
+    print(f"Positive IoU: {test_metrics.get('positive_iou')}")
+    print(f"Model: {metrics.get('model_path', model_root / 'crossmasknet_best.pt')}")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="python -m crosswalk_detector.workflow")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers.add_parser("dataset", parents=[_dataset_parser(add_help=False)], add_help=True)
+    subparsers.add_parser("train", parents=[_train_parser(add_help=False)], add_help=True)
+    subparsers.add_parser("test", parents=[_test_parser(add_help=False)], add_help=True)
+    args = parser.parse_args()
+    if args.command == "dataset":
+        sys.argv = [sys.argv[0], *sys.argv[2:]]
+        return dataset_main()
+    if args.command == "train":
+        sys.argv = [sys.argv[0], *sys.argv[2:]]
+        return train_main()
+    if args.command == "test":
+        sys.argv = [sys.argv[0], *sys.argv[2:]]
+        return test_main()
+    parser.error("Unknown command")
+    return 2
+
+
+def _dataset_parser(add_help: bool = True) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="dataset", add_help=add_help)
+    parser.add_argument("--profile", default="default")
+    parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
+    parser.add_argument("--export", type=Path, default=DEFAULT_EXPORT)
+    parser.add_argument("--image-size", type=int, default=128)
+    parser.add_argument("--positive-limit", type=int, default=2500)
+    parser.add_argument("--negative-ratio", type=float, default=1.0)
+    parser.add_argument("--min-confidence", type=float, default=0.4)
+    parser.add_argument("--min-mask-coverage", type=float, default=0.01)
+    parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--limit-scenes", type=int, default=None)
+    parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--skip-raw-cache", action="store_true")
+    parser.add_argument("--rebuild-export", action="store_true")
+    return parser
+
+
+def _train_parser(add_help: bool = True) -> argparse.ArgumentParser:
+    parser = _dataset_parser(add_help=add_help)
+    parser.prog = "train"
+    parser.add_argument("--model-output", type=Path, default=DEFAULT_MODEL)
+    parser.add_argument("--epochs", type=int, default=8)
+    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--learning-rate", type=float, default=1e-3)
+    parser.add_argument("--base-channels", type=int, default=24)
+    parser.add_argument("--num-workers", type=int, default=2)
+    parser.add_argument("--road-channel", action="store_true")
+    return parser
+
+
+def _test_parser(add_help: bool = True) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="test", add_help=add_help)
+    parser.add_argument("--profile", default="default")
+    parser.add_argument("--model-root", type=Path, default=DEFAULT_MODEL)
+    return parser
+
+
+def _ensure_project_assets(*, skip_model: bool) -> None:
+    script = REPO_ROOT / "scripts" / "download_submission_assets.py"
+    command = [sys.executable, str(script)]
+    if skip_model:
+        command.append("--skip-model")
+    subprocess.run(command, cwd=REPO_ROOT, check=True)
+
+
+def _prepare_dataset(
+    dataset_root: Path,
+    export_root: Path,
+    *,
+    limit_scenes: int | None,
+    workers: int,
+    positive_limit: int,
+    negative_ratio: float,
+    min_confidence: float,
+    min_mask_coverage: float,
+    image_size: int,
+    seed: int,
+    rebuild_export: bool,
+    skip_raw_cache: bool,
+) -> None:
+    _ensure_project_assets(skip_model=True)
+    if not skip_raw_cache:
+        _prepare_raw_cache(dataset_root, limit_scenes, workers)
+    if rebuild_export or not (export_root / "manifest.csv").exists():
+        summary = prepare_crossmask_export(
+            dataset_root,
+            export_root,
+            positive_limit=positive_limit,
+            negative_ratio=negative_ratio,
+            min_confidence=min_confidence,
+            min_mask_coverage=min_mask_coverage,
+            image_size=image_size,
+            seed=seed,
+            overwrite=rebuild_export,
+        )
+        print(json.dumps(summary, indent=2))
+    else:
+        print(f"Dataset export already exists: {export_root}")
+
+
+def _prepare_raw_cache(dataset_root: Path, limit_scenes: int | None, workers: int) -> None:
+    summary = download_dataset_scenes(dataset_root, limit_scenes=limit_scenes, workers=workers)
+    print(
+        f"Raw scenes ready: {summary['scene_count']} scene(s), "
+        f"{summary['downloaded']} downloaded, {summary['cached']} cached, "
+        f"{summary['size_mb']} MB"
+    )
+
+
+def _resolve(path: Path) -> Path:
+    return path if path.is_absolute() else REPO_ROOT / path
+
+
+def _require_default_profile(profile: str) -> None:
+    if profile != "default":
+        raise ValueError("Only --profile default is defined.")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

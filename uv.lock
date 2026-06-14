@@ -70,12 +70,16 @@ dependencies = [
     { name = "psutil" },
     { name = "pycocotools" },
     { name = "safetensors" },
-    { name = "sam3" },
     { name = "torch", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
     { name = "torch", version = "2.11.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "sys_platform == 'linux'" },
     { name = "torchvision", version = "0.26.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
     { name = "torchvision", version = "0.26.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "sys_platform == 'linux'" },
     { name = "transformers" },
+]
+
+[package.optional-dependencies]
+labeling = [
+    { name = "sam3" },
 ]
 
 [package.dev-dependencies]
@@ -92,13 +96,14 @@ requires-dist = [
     { name = "psutil", specifier = ">=7.2.0" },
     { name = "pycocotools", specifier = ">=2.0.11" },
     { name = "safetensors", specifier = ">=0.7.0" },
-    { name = "sam3", git = "https://github.com/facebookresearch/sam3.git" },
+    { name = "sam3", marker = "extra == 'labeling'", git = "https://github.com/facebookresearch/sam3.git" },
     { name = "torch", marker = "sys_platform != 'linux'", specifier = "==2.11.0" },
     { name = "torch", marker = "sys_platform == 'linux'", specifier = "==2.11.0", index = "https://download.pytorch.org/whl/cu128" },
     { name = "torchvision", marker = "sys_platform != 'linux'", specifier = "==0.26.0" },
     { name = "torchvision", marker = "sys_platform == 'linux'", specifier = "==0.26.0", index = "https://download.pytorch.org/whl/cu128" },
     { name = "transformers", specifier = ">=5.4.0" },
 ]
+provides-extras = ["labeling"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8.3.5" }]

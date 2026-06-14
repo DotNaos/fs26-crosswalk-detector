@@ -12,15 +12,22 @@ dependencies = [
   "psutil>=7.2.0",
   "pycocotools>=2.0.11",
   "safetensors>=0.7.0",
-  "sam3 @ git+https://github.com/facebookresearch/sam3.git",
   "torch==2.11.0",
   "torchvision==0.26.0",
   "transformers>=5.4.0",
 ]
 
+[project.optional-dependencies]
+labeling = [
+  "sam3 @ git+https://github.com/facebookresearch/sam3.git",
+]
+
 [project.scripts]
 crosswalk-pipeline = "crosswalk_detector.cli:main"
 crosswalk-scan-server = "crosswalk_detector.scan_server:main"
+dataset = "crosswalk_detector.workflow:dataset_main"
+train = "crosswalk_detector.workflow:train_main"
+test = "crosswalk_detector.workflow:test_main"
 
 [dependency-groups]
 dev = [

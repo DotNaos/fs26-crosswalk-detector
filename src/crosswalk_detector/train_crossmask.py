@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import csv
+import gzip
 import hashlib
 import json
 from pathlib import Path
@@ -20,7 +21,8 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 
 from .metadata_dataset import resolve_shard_path
-from .scan_backend import SceneRequest, TileRequest, crop_tile, fetch_scene_image
+from .raw_imagery import load_cached_scene_image
+from .scan_backend import SceneRequest, TileRequest, crop_tile, mercator_to_lat_lon
 
 
 @dataclass(frozen=True)
@@ -182,7 +184,7 @@ def prepare_crossmask_export(
             mask_path = mask_root / split / item.label / f"{safe_id}.png"
             if not image_path.exists() or not mask_path.exists():
                 scene = _scene_request(dataset_root, item.scene_id)
-                scene_image = scene_cache.setdefault(item.scene_id, fetch_scene_image(scene))
+                scene_image = scene_cache.setdefault(item.scene_id, load_cached_scene_image(dataset_root, scene))
                 tile = TileRequest(item.tile_id, item.row, item.col, item.bbox_mercator, item.relative_path)
                 image_path.parent.mkdir(parents=True, exist_ok=True)
                 crop_tile(scene_image, scene, tile).resize((image_size, image_size), Image.Resampling.BICUBIC).save(image_path, quality=94)
@@ -372,7 +374,7 @@ def _load_candidates(dataset_root: Path, *, min_confidence: float, min_mask_cove
             resolved = row.get("resolved_label", {})
             label = str(resolved.get("decision", ""))
             confidence = float(resolved.get("confidence") or 0.0)
-            candidate = _candidate_from_row(row, label, confidence)
+            candidate = _candidate_from_row(dataset_root, row, label, confidence)
             if candidate is None:
                 continue
             if label == "crosswalk":
@@ -383,11 +385,11 @@ def _load_candidates(dataset_root: Path, *, min_confidence: float, min_mask_cove
     return positives, negatives
 
 
-def _candidate_from_row(row: dict[str, Any], label: str, confidence: float) -> MaskCandidate | None:
+def _candidate_from_row(dataset_root: Path, row: dict[str, Any], label: str, confidence: float) -> MaskCandidate | None:
     mask_path = ""
     coverage = 0.0
     if label == "crosswalk":
-        mask_path = _row_mask_path(row)
+        mask_path = _row_mask_path(dataset_root, row)
         if not mask_path or not Path(mask_path).exists():
             return None
         coverage = _mask_coverage(Path(mask_path))
@@ -407,7 +409,7 @@ def _candidate_from_row(row: dict[str, Any], label: str, confidence: float) -> M
     )
 
 
-def _row_mask_path(row: dict[str, Any]) -> str:
+def _row_mask_path(dataset_root: Path, row: dict[str, Any]) -> str:
     resolved_source = row.get("resolved_label", {}).get("source_id")
     candidates = []
     for label in row.get("labels", []):
@@ -416,11 +418,25 @@ def _row_mask_path(row: dict[str, Any]) -> str:
             continue
         artifact = metadata.get("mask_artifact")
         if isinstance(artifact, dict) and artifact.get("path"):
-            candidates.append((label.get("source", {}).get("source_id"), str(artifact["path"])))
+            path = _resolve_mask_artifact_path(dataset_root, artifact)
+            if path:
+                candidates.append((label.get("source", {}).get("source_id"), path))
     for source_id, path in candidates:
         if source_id == resolved_source:
             return path
     return candidates[-1][1] if candidates else ""
+
+
+def _resolve_mask_artifact_path(dataset_root: Path, artifact: dict[str, Any]) -> str:
+    static_path = artifact.get("static_path")
+    if static_path:
+        candidate = dataset_root / str(static_path)
+        if candidate.exists():
+            return str(candidate)
+    path = artifact.get("path")
+    if path and Path(str(path)).exists():
+        return str(path)
+    return ""
 
 
 def _mask_coverage(path: Path) -> float:
@@ -430,8 +446,32 @@ def _mask_coverage(path: Path) -> float:
 
 
 def _scene_request(dataset_root: Path, scene_id: str) -> SceneRequest:
-    scene = _read_json(dataset_root / "scenes" / scene_id / "scene.json")
-    return SceneRequest(scene_id=scene_id, latitude=float(scene["latitude"]), longitude=float(scene["longitude"]), size_m=int(scene["size_m"]), image_px=int(scene["image_px"]), tile_size_m=int(scene["tile_size_m"]))
+    scene_path = dataset_root / "scenes" / scene_id / "scene.json"
+    if scene_path.exists():
+        scene = _read_json(scene_path)
+        return SceneRequest(scene_id=scene_id, latitude=float(scene["latitude"]), longitude=float(scene["longitude"]), size_m=int(scene["size_m"]), image_px=int(scene["image_px"]), tile_size_m=int(scene["tile_size_m"]))
+
+    index = _read_json(dataset_root / "dataset.json")
+    scene = next((entry for entry in index.get("scenes", []) if entry.get("scene_id") == scene_id), None)
+    if scene is None:
+        scene = next((entry for entry in index.get("shards", []) if entry.get("scene_id") == scene_id), None)
+    if scene is None:
+        raise FileNotFoundError(f"No scene metadata found for {scene_id} in {dataset_root}")
+    bbox = [float(value) for value in scene["bbox_mercator"]]
+    center_x = (bbox[0] + bbox[2]) / 2.0
+    center_y = (bbox[1] + bbox[3]) / 2.0
+    latitude, longitude = mercator_to_lat_lon(center_x, center_y)
+    size_m = int(round(max(bbox[2] - bbox[0], bbox[3] - bbox[1])))
+    image_px = int(scene.get("image_px", 2048))
+    tile_size_m = int(scene.get("tile_size_m", 25))
+    return SceneRequest(
+        scene_id=scene_id,
+        latitude=latitude,
+        longitude=longitude,
+        size_m=size_m,
+        image_px=image_px,
+        tile_size_m=tile_size_m,
+    )
 
 
 def _load_export_rows(export_root: Path) -> list[ExportSample]:
@@ -542,4 +582,7 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if path.suffix == ".gz":
+        with gzip.open(path, "rt", encoding="utf8") as handle:
+            return [json.loads(line) for line in handle if line.strip()]
     return [json.loads(line) for line in path.read_text(encoding="utf8").splitlines() if line.strip()]

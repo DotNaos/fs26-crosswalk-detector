@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download the public submission dataset and model assets."""
+"""Download the public project dataset and model assets."""
 
 from __future__ import annotations
 
@@ -71,7 +71,7 @@ def main() -> int:
         if cleanup:
             cleanup.cleanup()
 
-    print("Submission assets are ready.")
+    print("Project assets are ready.")
     print(f"Dataset: {dataset_output}")
     print(f"Model:   {model_output}")
     return 0
