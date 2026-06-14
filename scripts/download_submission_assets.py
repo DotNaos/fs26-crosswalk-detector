@@ -149,11 +149,18 @@ def verify_sha256(path: Path, expected: str) -> None:
 
 def safe_extract(archive: tarfile.TarFile, destination: Path) -> None:
     root = destination.resolve()
-    for member in archive.getmembers():
+    members = archive.getmembers()
+    total = len(members)
+    last_report = monotonic()
+    for index, member in enumerate(members, start=1):
         target = (destination / member.name).resolve()
         if root != target and root not in target.parents:
             raise RuntimeError(f"Archive member escapes destination: {member.name}")
-    archive.extractall(destination, filter="data")
+        archive.extract(member, destination, filter="data")
+        now = monotonic()
+        if index == 1 or index == total or now - last_report >= 1.0:
+            print(f"  extracted {index}/{total}", flush=True)
+            last_report = now
 
 
 def _format_bytes(value: int) -> str:
