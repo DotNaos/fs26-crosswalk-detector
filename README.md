@@ -58,6 +58,8 @@ Using `uv` (recommended):
 
 ```bash
 uv sync
+uv run download-images
+uv run test --input-dir data/input/crossmask-images --output-dir data/predictions/my-run --positive-threshold 0.005
 uv run dataset
 uv run train
 uv run test
@@ -69,6 +71,8 @@ Using Python:
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e .
+python -m crosswalk_detector.workflow download-images
+python -m crosswalk_detector.workflow test --input-dir data/input/crossmask-images --output-dir data/predictions/my-run --positive-threshold 0.005
 python -m crosswalk_detector.workflow dataset
 python -m crosswalk_detector.workflow train
 python -m crosswalk_detector.workflow test
@@ -87,12 +91,14 @@ uv run train --skip-raw-cache --positive-limit 20 --negative-ratio 1 \
   --rebuild-export
 uv run test --model-root models/crossmask/sam3-500k-road-channel-v4
 uv run test --input-dir path/to/images --output-dir data/predictions/my-run --positive-threshold 0.005
+uv run download-images --output-dir data/input/demo-images --positive-count 10 --negative-count 10
 ```
 
-The workflow has three commands:
+The normal workflow commands are:
 
 | Command | What it does |
 |---|---|
+| `uv run download-images` | Downloads a small folder of example input images that can be passed to `test --input-dir`. |
 | `uv run dataset` | Downloads the public dataset metadata if needed, downloads the required raw aerial scenes, and prepares the local training images and masks. |
 | `uv run train` | Ensures the dataset exists, then trains CrossMaskNet and writes a checkpoint plus metrics. |
 | `uv run test` | Downloads the public checkpoint if needed and prints the stored test metrics for the default model. With `--input-dir`, it classifies new images into output folders. |
@@ -114,6 +120,8 @@ All options are optional. If you omit them, the commands use these defaults:
 | `--output-dir` | `data/predictions/crossmask-test` | Where `test --input-dir` writes classified images, overlays, and summary files. |
 | `--positive-threshold` | `0.005` | Minimum mask coverage for `test --input-dir` to classify an image as `positive`. Images below this value go to `negative/`. Lower values put more images in `positive/`; higher values put more images in `negative/`. |
 | `--no-overlays` | off | Skips writing overlay images for positive predictions. |
+| `--positive-count` | `10` | Number of source-positive example images written by `download-images`. |
+| `--negative-count` | `10` | Number of source-negative example images written by `download-images`. |
 | `--epochs` | `8` | Number of full passes over the training data. `8` means the model sees the prepared training set eight times. |
 | `--batch-size` | `64` | Number of image/mask pairs processed in one training step. Use `16` or `32` if the machine runs out of memory. |
 | `--image-size` | `128` | Training crop size. `128` means each crop is resized to 128 x 128 pixels. |
@@ -146,6 +154,21 @@ To classify new image files, put them in one folder and run:
 
 ```bash
 uv run test --input-dir path/to/images --output-dir data/predictions/my-run --positive-threshold 0.005
+```
+
+`test` copies input images into the output folders. It does not move or delete
+the original files in `--input-dir`.
+
+If you need a ready-made input folder first, run:
+
+```bash
+uv run download-images --output-dir data/input/crossmask-images
+```
+
+Then classify those images:
+
+```bash
+uv run test --input-dir data/input/crossmask-images --output-dir data/predictions/my-run --positive-threshold 0.005
 ```
 
 This writes:

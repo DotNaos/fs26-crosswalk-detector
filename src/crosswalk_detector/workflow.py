@@ -15,6 +15,7 @@ from .train_crossmask import prepare_crossmask_export, train_crossmask
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATASET = Path("web/public/static-datasets/sam3-500k-masks-v1")
 DEFAULT_EXPORT = Path("data/processed/crossmask/sam3-500k-road-channel-v4")
+DEFAULT_INPUT_IMAGES = Path("data/input/crossmask-images")
 DEFAULT_MODEL = Path("models/crossmask/sam3-500k-road-channel-v4")
 
 
@@ -37,6 +38,34 @@ def dataset_main() -> int:
         rebuild_export=args.rebuild_export,
         skip_raw_cache=args.skip_raw_cache,
     )
+    return 0
+
+
+def download_images_main() -> int:
+    args = _download_images_parser().parse_args()
+    _require_default_profile(args.profile)
+    _ensure_project_assets(skip_model=True)
+
+    from .input_images import download_input_images
+
+    output_dir = _resolve(args.output_dir)
+    summary = download_input_images(
+        _resolve(args.dataset),
+        output_dir,
+        positive_count=args.positive_count,
+        negative_count=args.negative_count,
+        image_size=args.image_size,
+        seed=args.seed,
+        min_confidence=args.min_confidence,
+        min_mask_coverage=args.min_mask_coverage,
+        overwrite=args.overwrite,
+    )
+    print("Input images ready")
+    print(f"Images: {summary['total']}")
+    print(f"Positive source examples: {summary['positive']}")
+    print(f"Negative source examples: {summary['negative']}")
+    print(f"Input directory: {output_dir}")
+    print(f"Manifest: {summary['manifest']}")
     return 0
 
 
@@ -130,12 +159,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="python -m crosswalk_detector.workflow")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("dataset", parents=[_dataset_parser(add_help=False)], add_help=True)
+    subparsers.add_parser("download-images", parents=[_download_images_parser(add_help=False)], add_help=True)
     subparsers.add_parser("train", parents=[_train_parser(add_help=False)], add_help=True)
     subparsers.add_parser("test", parents=[_test_parser(add_help=False)], add_help=True)
     args = parser.parse_args()
     if args.command == "dataset":
         sys.argv = [sys.argv[0], *sys.argv[2:]]
         return dataset_main()
+    if args.command == "download-images":
+        sys.argv = [sys.argv[0], *sys.argv[2:]]
+        return download_images_main()
     if args.command == "train":
         sys.argv = [sys.argv[0], *sys.argv[2:]]
         return train_main()
@@ -174,6 +207,21 @@ def _train_parser(add_help: bool = True) -> argparse.ArgumentParser:
     parser.add_argument("--base-channels", type=int, default=24)
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--road-channel", action="store_true")
+    return parser
+
+
+def _download_images_parser(add_help: bool = True) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="download-images", add_help=add_help)
+    parser.add_argument("--profile", default="default", help="Prepared project configuration.")
+    parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET, help="Metadata dataset location.")
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_INPUT_IMAGES, help="Where downloaded input images are written.")
+    parser.add_argument("--positive-count", type=int, default=10, help="How many source-positive example images to download.")
+    parser.add_argument("--negative-count", type=int, default=10, help="How many source-negative example images to download.")
+    parser.add_argument("--image-size", type=int, default=128, help="Output image size in pixels.")
+    parser.add_argument("--min-confidence", type=float, default=0.4, help="Minimum source-label confidence for positive examples.")
+    parser.add_argument("--min-mask-coverage", type=float, default=0.01, help="Minimum source mask coverage for positive examples.")
+    parser.add_argument("--seed", type=int, default=7, help="Repeatable sampling seed.")
+    parser.add_argument("--overwrite", action="store_true", help="Remove existing image files in the output folder first.")
     return parser
 
 
