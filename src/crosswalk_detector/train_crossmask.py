@@ -10,10 +10,12 @@ import json
 from pathlib import Path
 import random
 import shutil
+from time import monotonic
 from typing import Any
 
 import numpy as np
 from PIL import Image
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -139,6 +141,7 @@ def prepare_crossmask_export(
     image_size: int = 128,
     seed: int = 7,
     overwrite: bool = False,
+    show_progress: bool = True,
 ) -> dict[str, Any]:
     if output_root.exists() and overwrite:
         shutil.rmtree(output_root)
@@ -177,7 +180,7 @@ def prepare_crossmask_export(
             ],
         )
         writer.writeheader()
-        for item in candidates:
+        for item in _iter_with_progress(candidates, "Preparing training images", enabled=show_progress):
             split = _split_for_id(item.tile_id)
             safe_id = item.image_id.replace(":", "__")
             image_path = image_root / split / item.label / f"{safe_id}.jpg"
@@ -241,6 +244,8 @@ def train_crossmask(
     road_channel: bool = False,
     num_workers: int = 2,
     seed: int = 7,
+    max_train_seconds: int | None = None,
+    show_progress: bool = True,
 ) -> dict[str, Any]:
     if input_channels != (4 if road_channel else 3):
         raise ValueError("input_channels must be 4 with --road-channel and 3 without it.")
@@ -262,30 +267,61 @@ def train_crossmask(
     best_state = None
     best_score = -1.0
     pos_weight = _positive_pixel_weight(train_rows)
+    started_at = monotonic()
+    stopped_early = False
 
-    for epoch in range(1, epochs + 1):
-        model.train()
-        total_loss = 0.0
-        seen = 0
-        for images, masks, _tile_ids, _labels in train_loader:
-            images = images.to(device)
-            masks = masks.to(device)
-            optimizer.zero_grad(set_to_none=True)
-            logits = model(images)
-            loss = _segmentation_loss(logits, masks, pos_weight.to(device))
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
-            optimizer.step()
-            total_loss += float(loss.item()) * images.size(0)
-            seen += images.size(0)
-        scheduler.step()
-        val_metrics = evaluate_crossmask(model, val_loader, device)
-        epoch_row = {"epoch": epoch, "train_loss": round(total_loss / max(1, seen), 6), **_round_metrics(val_metrics)}
-        history.append(epoch_row)
-        if val_metrics["positive_dice"] > best_score:
-            best_score = float(val_metrics["positive_dice"])
-            best_state = {key: value.cpu() for key, value in model.state_dict().items()}
-        print(json.dumps(epoch_row), flush=True)
+    progress = _progress() if show_progress else None
+    progress_context = progress if progress is not None else _NoProgress()
+    with progress_context:
+        epoch_task = progress.add_task("Training epochs", total=epochs) if progress is not None else None
+        for epoch in range(1, epochs + 1):
+            if _time_budget_exhausted(started_at, max_train_seconds) and history:
+                stopped_early = True
+                break
+
+            model.train()
+            total_loss = 0.0
+            seen = 0
+            batch_task = progress.add_task(f"Epoch {epoch}/{epochs}", total=len(train_loader)) if progress is not None else None
+            for images, masks, _tile_ids, _labels in train_loader:
+                images = images.to(device)
+                masks = masks.to(device)
+                optimizer.zero_grad(set_to_none=True)
+                logits = model(images)
+                loss = _segmentation_loss(logits, masks, pos_weight.to(device))
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+                optimizer.step()
+                total_loss += float(loss.item()) * images.size(0)
+                seen += images.size(0)
+                if progress is not None and batch_task is not None:
+                    progress.update(batch_task, advance=1)
+                if _time_budget_exhausted(started_at, max_train_seconds) and seen > 0:
+                    stopped_early = True
+                    break
+            scheduler.step()
+            if progress is not None and batch_task is not None:
+                progress.remove_task(batch_task)
+
+            val_metrics = evaluate_crossmask(model, val_loader, device)
+            checkpoint_path = model_root / f"checkpoint_epoch_{epoch:03d}.pt"
+            torch.save(model.state_dict(), checkpoint_path)
+            torch.save(model.state_dict(), model_root / "crossmasknet_latest.pt")
+            epoch_row = {
+                "epoch": epoch,
+                "train_loss": round(total_loss / max(1, seen), 6),
+                "checkpoint_path": str(checkpoint_path),
+                **_round_metrics(val_metrics),
+            }
+            history.append(epoch_row)
+            if val_metrics["positive_dice"] > best_score:
+                best_score = float(val_metrics["positive_dice"])
+                best_state = {key: value.cpu() for key, value in model.state_dict().items()}
+            print(json.dumps(epoch_row), flush=True)
+            if progress is not None and epoch_task is not None:
+                progress.update(epoch_task, advance=1)
+            if stopped_early:
+                break
 
     if best_state is not None:
         model.load_state_dict(best_state)
@@ -305,6 +341,8 @@ def train_crossmask(
         "road_channel": road_channel,
         "batch_size": batch_size,
         "learning_rate": learning_rate,
+        "max_train_seconds": max_train_seconds,
+        "stopped_early": stopped_early,
         "counts": _count_rows(rows),
         "history": history,
         "test": _round_metrics(test_metrics),
@@ -492,6 +530,39 @@ def _loader(rows: list[ExportSample], image_size: int, train: bool, batch_size: 
         pin_memory=torch.cuda.is_available(),
         persistent_workers=num_workers > 0,
     )
+
+
+class _NoProgress:
+    def __enter__(self) -> "_NoProgress":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+
+def _progress() -> Progress:
+    return Progress(
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+    )
+
+
+def _iter_with_progress(items: list[MaskCandidate], description: str, *, enabled: bool) -> Any:
+    if not enabled:
+        yield from items
+        return
+    with _progress() as progress:
+        task = progress.add_task(description, total=len(items))
+        for item in items:
+            yield item
+            progress.update(task, advance=1)
+
+
+def _time_budget_exhausted(started_at: float, max_train_seconds: int | None) -> bool:
+    return max_train_seconds is not None and max_train_seconds > 0 and monotonic() - started_at >= max_train_seconds
 
 
 def _conv_block(in_channels: int, out_channels: int) -> nn.Sequential:

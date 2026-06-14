@@ -30,3 +30,24 @@ def test_custom_model_root_does_not_download_release_assets(tmp_path: Path, monk
 
     assert workflow.test_main() == 0
     assert calls == []
+
+
+def test_train_defaults_are_small_and_local() -> None:
+    args = workflow._train_parser().parse_args([])
+
+    assert args.export == workflow.DEFAULT_TRAIN_EXPORT
+    assert args.model_output == workflow.DEFAULT_TRAIN_MODEL
+    assert args.positive_limit == 30
+    assert args.epochs == 1
+    assert args.batch_size == 4
+    assert args.base_channels == 4
+    assert args.num_workers == 0
+    assert args.max_train_seconds == 120
+    assert args.skip_raw_cache is True
+
+
+def test_train_can_disable_time_limit_and_prefetch_raw_cache() -> None:
+    args = workflow._train_parser().parse_args(["--max-train-seconds", "0", "--prefetch-raw-cache"])
+
+    assert args.max_train_seconds == 0
+    assert args.skip_raw_cache is False

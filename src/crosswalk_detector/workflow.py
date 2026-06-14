@@ -17,6 +17,8 @@ DEFAULT_DATASET = Path("web/public/static-datasets/sam3-500k-masks-v1")
 DEFAULT_EXPORT = Path("data/processed/crossmask/sam3-500k-road-channel-v4")
 DEFAULT_INPUT_IMAGES = Path("data/input/crossmask-images")
 DEFAULT_MODEL = Path("models/crossmask/sam3-500k-road-channel-v4")
+DEFAULT_TRAIN_EXPORT = Path("data/processed/crossmask/local-run")
+DEFAULT_TRAIN_MODEL = Path("models/crossmask/local-run")
 
 
 def dataset_main() -> int:
@@ -90,6 +92,7 @@ def train_main() -> int:
         seed=args.seed,
         rebuild_export=args.rebuild_export,
         skip_raw_cache=args.skip_raw_cache,
+        show_progress=not args.no_progress,
     )
 
     metrics = train_crossmask(
@@ -104,6 +107,8 @@ def train_main() -> int:
         road_channel=args.road_channel,
         num_workers=args.num_workers,
         seed=args.seed,
+        max_train_seconds=args.max_train_seconds,
+        show_progress=not args.no_progress,
     )
     print(
         f"Training complete: accuracy={metrics['test']['image_accuracy']:.6f}, "
@@ -202,13 +207,17 @@ def _dataset_parser(add_help: bool = True) -> argparse.ArgumentParser:
 def _train_parser(add_help: bool = True) -> argparse.ArgumentParser:
     parser = _dataset_parser(add_help=add_help)
     parser.prog = "train"
-    parser.add_argument("--model-output", type=Path, default=DEFAULT_MODEL)
-    parser.add_argument("--epochs", type=int, default=8)
-    parser.add_argument("--batch-size", type=int, default=64)
+    parser.set_defaults(export=DEFAULT_TRAIN_EXPORT, positive_limit=30, skip_raw_cache=True)
+    parser.add_argument("--model-output", type=Path, default=DEFAULT_TRAIN_MODEL)
+    parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
-    parser.add_argument("--base-channels", type=int, default=24)
-    parser.add_argument("--num-workers", type=int, default=2)
+    parser.add_argument("--base-channels", type=int, default=4)
+    parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--max-train-seconds", type=int, default=120)
     parser.add_argument("--road-channel", action="store_true")
+    parser.add_argument("--prefetch-raw-cache", action="store_false", dest="skip_raw_cache")
+    parser.add_argument("--no-progress", action="store_true")
     return parser
 
 
@@ -277,6 +286,7 @@ def _prepare_dataset(
     seed: int,
     rebuild_export: bool,
     skip_raw_cache: bool,
+    show_progress: bool = True,
 ) -> None:
     _ensure_project_assets(skip_model=True)
     if not skip_raw_cache:
@@ -292,6 +302,7 @@ def _prepare_dataset(
             image_size=image_size,
             seed=seed,
             overwrite=rebuild_export,
+            show_progress=show_progress,
         )
         print(json.dumps(summary, indent=2))
     else:

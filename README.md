@@ -73,9 +73,17 @@ This creates:
 To train a fresh model and test that exact model, run this after setup:
 
 ```bash
-uv run train --model-output models/crossmask/local-run
+uv run train
 uv run test --model-root models/crossmask/local-run
 uv run test --model-root models/crossmask/local-run --input-dir data/input/crossmask-images --output-dir data/predictions/local-run --positive-threshold 0.005
+```
+
+The default training run is intentionally small. It shows progress, writes
+checkpoints, and is meant to finish in about two minutes on a normal machine.
+For a larger run, increase the training options:
+
+```bash
+uv run train --positive-limit 2500 --epochs 8 --batch-size 64 --base-channels 24 --num-workers 2 --max-train-seconds 0 --prefetch-raw-cache
 ```
 
 The normal workflow commands are:
@@ -97,8 +105,8 @@ All options are optional. If you omit them, the commands use these defaults:
 |---|---|---|
 | `--profile` | `default` | Selects the prepared project configuration. |
 | `--dataset` | `web/public/static-datasets/sam3-500k-masks-v1` | Metadata dataset location for `dataset` and `train`. |
-| `--export` | `data/processed/crossmask/sam3-500k-road-channel-v4` | Where `dataset` writes prepared training images and masks, and where `train` reads them. |
-| `--model-output` | `models/crossmask/sam3-500k-road-channel-v4` | Where `train` writes model checkpoints and metrics. |
+| `--export` | `data/processed/crossmask/local-run` for `train`; `data/processed/crossmask/sam3-500k-road-channel-v4` for `dataset` | Where prepared training images and masks are written. |
+| `--model-output` | `models/crossmask/local-run` | Where `train` writes model checkpoints and metrics. |
 | `--model-root` | `models/crossmask/sam3-500k-road-channel-v4` | Where `test` reads model checkpoints and metrics. |
 | `--input-dir` | not set | Folder of new images for `test` to classify. Supports common image files such as JPG and PNG. |
 | `--output-dir` | `data/predictions/crossmask-test` | Where `test --input-dir` writes classified images, overlays, and summary files. |
@@ -107,20 +115,23 @@ All options are optional. If you omit them, the commands use these defaults:
 | `--count` | `20` | Total number of example images written by `download-images`. |
 | `--positive-ratio` | `0.5` | Share of downloaded examples that come from positive source labels. `0.5` with `--count 20` means 10 positive and 10 negative examples. |
 | `--positive-count` / `--negative-count` | not set | Explicit class counts for `download-images` if you do not want to use `--count` and `--positive-ratio`. |
-| `--epochs` | `8` | Number of full passes over the training data. `8` means the model sees the prepared training set eight times. |
-| `--batch-size` | `64` | Number of image/mask pairs processed in one training step. Use `16` or `32` if the machine runs out of memory. |
+| `--epochs` | `1` | Number of full passes over the training data. Increase this for a stronger run. |
+| `--batch-size` | `4` | Number of image/mask pairs processed in one training step. Increase this on stronger machines. |
 | `--image-size` | `128` | Training crop size. `128` means each crop is resized to 128 x 128 pixels. |
 | `--limit-scenes` | no limit | Limits the raw scene prefetch step. The export can still download a missing scene later if it needs it. |
-| `--positive-limit` | `2500` | Maximum number of crosswalk examples used when preparing the local training export. |
+| `--positive-limit` | `30` for `train`; `2500` for `dataset` | Maximum number of crosswalk examples used when preparing the local training export. |
 | `--negative-ratio` | `1.0` | Number of no-crosswalk examples per crosswalk example. `1.0` means a balanced export. |
 | `--min-confidence` | `0.4` | Minimum released label confidence accepted for training examples. |
 | `--min-mask-coverage` | `0.01` | Minimum mask area required for a positive crosswalk example. |
 | `--workers` | `4` | Parallel download workers for raw aerial scenes. |
-| `--num-workers` | `2` | Data-loading workers used while training. |
+| `--num-workers` | `0` | Data-loading workers used while training. Increase this on stronger machines. |
 | `--learning-rate` | `0.001` | Training step size for the optimizer. |
-| `--base-channels` | `24` | Width of the CrossMaskNet feature layers. Larger values make the model heavier. |
+| `--base-channels` | `4` | Width of the CrossMaskNet feature layers. Larger values make the model heavier and stronger. |
+| `--max-train-seconds` | `120` | Soft training time budget in seconds. `0` disables the limit. |
 | `--road-channel` | off | Adds a road-context input channel during training. |
-| `--skip-raw-cache` | off | Skips the full scene prefetch and downloads only scenes needed while building the export. |
+| `--skip-raw-cache` | on for `train`; off for `dataset` | Skips the full scene prefetch and downloads only scenes needed while building the export. |
+| `--prefetch-raw-cache` | off | For `train`, downloads the raw scene cache before building the export. This is slower but useful for larger runs. |
+| `--no-progress` | off | Disables progress bars during training. |
 | `--rebuild-export` | off | Recreates the prepared dataset export even if it already exists. |
 | `--seed` | `7` | Keeps the train/test split and sampling repeatable. |
 
@@ -131,6 +142,15 @@ swisstopo scene images locally, and prepares the training export.
 
 `uv run train` reuses the prepared export when it already exists. If it is
 missing, `train` prepares it first and then trains CrossMaskNet.
+
+During training, checkpoints are written to the model output folder:
+
+| File | Content |
+|---|---|
+| `checkpoint_epoch_001.pt` | Model weights after epoch 1. Later epochs use `002`, `003`, and so on. |
+| `crossmasknet_latest.pt` | Most recent checkpoint. |
+| `crossmasknet_best.pt` | Best checkpoint selected from the run. |
+| `metrics.json` | Metrics, settings, and checkpoint paths for the run. |
 
 `uv run test` restores the public model checkpoint if needed and prints the
 stored held-out test metrics for the default model.
