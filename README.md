@@ -58,7 +58,7 @@ Using `uv` (recommended):
 
 ```bash
 uv sync
-uv run download-images
+uv run download-images --positive-count 10 --negative-count 10 --output-dir data/input/crossmask-images
 uv run test --input-dir data/input/crossmask-images --output-dir data/predictions/my-run --positive-threshold 0.005
 uv run dataset
 uv run train
@@ -71,7 +71,7 @@ Using Python:
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e .
-python -m crosswalk_detector.workflow download-images
+python -m crosswalk_detector.workflow download-images --positive-count 10 --negative-count 10 --output-dir data/input/crossmask-images
 python -m crosswalk_detector.workflow test --input-dir data/input/crossmask-images --output-dir data/predictions/my-run --positive-threshold 0.005
 python -m crosswalk_detector.workflow dataset
 python -m crosswalk_detector.workflow train
@@ -162,7 +162,7 @@ the original files in `--input-dir`.
 If you need a ready-made input folder first, run:
 
 ```bash
-uv run download-images --output-dir data/input/crossmask-images
+uv run download-images --positive-count 10 --negative-count 10 --output-dir data/input/crossmask-images
 ```
 
 Then classify those images:
