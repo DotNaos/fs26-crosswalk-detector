@@ -97,7 +97,7 @@ def test_main() -> int:
             _resolve(args.input_dir),
             output_dir,
             model_root,
-            threshold=args.threshold,
+            threshold=args.positive_threshold,
             include_overlays=not args.no_overlays,
         )
         print("CrossMaskNet directory test complete")
@@ -183,7 +183,14 @@ def _test_parser(add_help: bool = True) -> argparse.ArgumentParser:
     parser.add_argument("--model-root", type=Path, default=DEFAULT_MODEL, help="Model checkpoint and metrics directory.")
     parser.add_argument("--input-dir", type=Path, default=None, help="Folder of new images to classify.")
     parser.add_argument("--output-dir", type=Path, default=Path("data/predictions/crossmask-test"), help="Where classified outputs are written.")
-    parser.add_argument("--threshold", type=float, default=0.005, help="Decision threshold for classifying an image as positive.")
+    parser.add_argument(
+        "--positive-threshold",
+        "--threshold",
+        dest="positive_threshold",
+        type=float,
+        default=0.005,
+        help="Minimum mask coverage for positive. Images below this value are negative.",
+    )
     parser.add_argument("--no-overlays", action="store_true", help="Do not write positive overlay images.")
     return parser
 
