@@ -41,9 +41,9 @@ _PILOT_EXPORTS = {
 
 def __getattr__(name: str) -> Any:
     if name in _DATASET_EXPORTS:
-        module = import_module(".dataset", __name__)
+        module = import_module(".data.dataset", __name__)
         return getattr(module, name)
     if name in _PILOT_EXPORTS:
-        module = import_module(".pilot", __name__)
+        module = import_module(".geo.pilot", __name__)
         return getattr(module, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

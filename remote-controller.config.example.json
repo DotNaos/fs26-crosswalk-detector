@@ -1,9 +1,0 @@
-{
-  "host": "gpu.example.edu",
-  "username": "your-username",
-  "port": 22,
-  "repo_path": "~/projects/fs26-crosswalk-detector",
-  "partition": "debug",
-  "time_limit": "00:05:00",
-  "poll_interval_seconds": 2
-}

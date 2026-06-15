@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from crosswalk_detector.sam3_results import summarize_sam3_results
+from crosswalk_detector.data.sam3_results import summarize_sam3_results
 
 
 def test_summarize_sam3_results_counts_scores_and_masks(tmp_path: Path) -> None:

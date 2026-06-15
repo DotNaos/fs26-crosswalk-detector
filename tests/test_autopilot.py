@@ -1,6 +1,6 @@
 from PIL import Image, ImageDraw
 
-from crosswalk_detector.autopilot import GeoReference, WEB_MERCATOR_WORLD_MIN, _aligned_grid_origin, _build_bvh_cells, _ranked_panel_cells, build_urban_grid
+from crosswalk_detector.geo.autopilot import GeoReference, WEB_MERCATOR_WORLD_MIN, _aligned_grid_origin, _build_bvh_cells, _ranked_panel_cells, build_urban_grid
 
 
 def test_build_urban_grid_detects_clusters_without_city_coordinates() -> None:

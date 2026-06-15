@@ -3,7 +3,7 @@ from PIL import Image, ImageDraw
 
 from dataclasses import replace
 
-from crosswalk_detector.scan_backend import Sam31CrosswalkScanner, Sam31Detection, Sam31TileMetrics, SceneRequest, TileRequest
+from crosswalk_detector.scan.scan_backend import Sam31CrosswalkScanner, Sam31Detection, Sam31TileMetrics, SceneRequest, TileRequest
 
 
 def _scanner() -> Sam31CrosswalkScanner:

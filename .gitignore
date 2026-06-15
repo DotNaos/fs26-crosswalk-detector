@@ -17,8 +17,8 @@ prototypes/**/node_modules/
 .local/
 
 # Local ML assets
-data/
-models/
+/data/
+/models/
 validation-output/
 dogfood-output/
 jobs/

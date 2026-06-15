@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from crosswalk_detector import crossmask_inference
+from crosswalk_detector.models import crossmask_inference
 
 
 def test_run_crossmask_image_directory_writes_classified_outputs(tmp_path: Path, monkeypatch) -> None:

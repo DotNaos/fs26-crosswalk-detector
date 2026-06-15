@@ -2,7 +2,7 @@ import json
 import sys
 from pathlib import Path
 
-from crosswalk_detector import crossmask_inference
+from crosswalk_detector.models import crossmask_inference
 from crosswalk_detector import workflow
 
 

@@ -495,7 +495,7 @@ exit $exit_status
       useSshPass: usePassword && hasSshpass(),
       useExpect: usePassword && !hasSshpass() && hasExpect(),
       login: buildRemoteLogin(config),
-      hfTokenOpRef: process.env.CROSSWALK_HF_TOKEN_OP_REF ?? "op://dev/Hugging Face Read Token/credential",
+      hfTokenOpRef: process.env.CROSSWALK_HF_TOKEN_OP_REF ?? "",
     });
     writeFileSync(metadata.local_script_path, script, { encoding: "utf8", mode: 0o755 });
   }

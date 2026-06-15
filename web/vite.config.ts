@@ -14,7 +14,7 @@ export default defineConfig(({ command }) => {
     plugins: [react(), tailwindcss()],
     server: {
       port: 5173,
-      allowedHosts: ["crosswalk-review.localhost", "os-machina.tail5bb1d7.ts.net"],
+      allowedHosts: ["crosswalk-review.localhost"],
       proxy: {
         "/api": {
           target: backendTarget,

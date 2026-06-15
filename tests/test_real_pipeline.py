@@ -2,8 +2,8 @@ import gzip
 import json
 from pathlib import Path
 
-from crosswalk_detector.real_config import SceneSpec
-from crosswalk_detector.real_pipeline import write_compact_manifest
+from crosswalk_detector.data.real_config import SceneSpec
+from crosswalk_detector.data.real_pipeline import write_compact_manifest
 
 
 def test_write_compact_manifest_stores_coordinates_and_labels(tmp_path: Path) -> None:

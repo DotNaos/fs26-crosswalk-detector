@@ -25,7 +25,7 @@ labeling = [
 
 [project.scripts]
 crosswalk-pipeline = "crosswalk_detector.cli:main"
-crosswalk-scan-server = "crosswalk_detector.scan_server:main"
+crosswalk-scan-server = "crosswalk_detector.scan.scan_server:main"
 dataset = "crosswalk_detector.workflow:dataset_main"
 download-images = "crosswalk_detector.workflow:download_images_main"
 train = "crosswalk_detector.workflow:train_main"

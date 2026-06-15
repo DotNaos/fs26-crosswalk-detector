@@ -1,6 +1,8 @@
-# Crosswalk Review App
+# Crosswalk Dataset Explorer
 
-This folder now contains a browser-first dataset creator for crosswalk labeling. The dataset state lives in the browser, the labeling model runs in the browser, and the finished labeled dataset can be exported as a ZIP.
+This folder contains the web frontend for inspecting the released crosswalk
+metadata dataset. The public deployment is read-only and uses compressed static
+metadata from `web/public/static-datasets/`.
 
 ## Run
 
@@ -9,39 +11,30 @@ bun install
 bun run dev
 bun run lint
 bun run dev:url
-bun run dev:tailnet:url
+bun run build
 ```
 
-The app starts the frontend through `portless` on a stable local URL:
+The app starts through `portless` on a stable local URL:
 
-- `http://crosswalk-review.localhost:1355`
+```text
+http://crosswalk-review.localhost:1355
+```
 
-When you start `bun run dev`, the launcher also publishes the current Vite dev port into your Tailscale tailnet with `tailscale serve --bg http://127.0.0.1:<vite-port>`.
-This keeps the stable `portless` URL for local development while making the app reachable from your other Tailscale devices through your machine's `*.ts.net` address.
-The launcher prints both the stable local URL and the Tailnet URL on startup.
-If Serve is not yet enabled for your tailnet, the launcher prints the one-time enable link you need to open.
-You can always print the expected tailnet hostname manually with `bun run dev:tailnet:url`.
-
-If you want to bypass `portless` temporarily, use:
+For a static-only production build:
 
 ```bash
-bun run dev:client:direct
+VITE_CROSSWALK_STATIC_ONLY=1 bun run build
 ```
 
-If you want to skip the automatic Tailscale step for one run:
+If Tailscale is installed, `bun run dev` may also expose the current local dev
+server through Tailscale Serve. Set `TAILSCALE_SERVE=0` to skip that local
+convenience step.
 
-```bash
-TAILSCALE_SERVE=0 bun run dev
-```
+## What It Does
 
-## What it does
-
-- generates dataset tiles in the browser from built-in Swiss scene presets
-- renders the map as the single review canvas
-- loads SWISSIMAGE tiles directly in the browser and slices scene tiles on demand
-- runs CLIPSeg in the browser with `transformers.js`
-- stores labels, config, and map review state in browser storage
-- exports a ready-to-use ZIP with `labels.csv`, `tiles.json`, `config.toml`, and tile images
-- enforces file-size limits with ESLint:
-  - warning above `500` lines
-  - error above `700` lines
+- shows the released metadata dataset on a Leaflet map
+- filters tiles by dataset, city, split, and label
+- previews source imagery and mask overlays for selected tiles
+- shows model and human label history for each tile
+- can call the local backend for CrossMaskNet checks when writable local data is
+  available

@@ -338,7 +338,7 @@ export default function App() {
               {crossmaskRunning ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" />}
               Run on visible tiles
             </Button>
-            {readOnlyDataset ? <div className="text-xs text-slate-300/70">Live model runs need the Ubuntu inference server. This deployment is for dataset inspection only.</div> : null}
+            {readOnlyDataset ? <div className="text-xs text-slate-300/70">Live model runs need a local writable backend. This deployment is for dataset inspection only.</div> : null}
             {crossmaskResult ? <div className="text-xs text-slate-300/70">{crossmaskResult}</div> : null}
           </div>
 

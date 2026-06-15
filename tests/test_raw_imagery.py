@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from crosswalk_detector.raw_imagery import download_dataset_scenes, estimate_scene_cache_size
+from crosswalk_detector.data.raw_imagery import download_dataset_scenes, estimate_scene_cache_size
 
 
 def _write_dataset(root: Path) -> Path:

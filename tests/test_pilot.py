@@ -3,7 +3,7 @@ import importlib.util
 import pytest
 
 from crosswalk_detector import build_pilot_summary, load_pilot_config, raw_size_mb
-from crosswalk_detector.pilot import (
+from crosswalk_detector.geo.pilot import (
     build_full_capped_dataset,
     crosswalk_score,
     derive_split_targets,
