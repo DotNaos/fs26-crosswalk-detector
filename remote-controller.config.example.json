@@ -1,6 +1,6 @@
 {
-  "host": "mercury.fhgr.ch",
-  "username": "schuetoliver",
+  "host": "gpu.example.edu",
+  "username": "your-username",
   "port": 22,
   "repo_path": "~/projects/fs26-crosswalk-detector",
   "partition": "debug",

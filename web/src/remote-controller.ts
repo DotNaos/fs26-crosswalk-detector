@@ -75,11 +75,8 @@ function formatRemoteError(error: unknown, host: string) {
   if (message.includes("Permission denied")) {
     return `Could not log in to ${host}. Check the username and password or SSH key setup.`;
   }
-  if (message.includes(".env.fhgr-ssh") && message.includes("no such file or directory")) {
-    return "FHGR SSH env file is missing. Create ~/projects.school/tools/fhgr-server-config/.env.fhgr-ssh from .env.example so 1Password can provide SSHPASS.";
-  }
   if (message.includes("executable file not found") && message.includes("sshpass")) {
-    return "sshpass is required by the FHGR helper tools. Install sshpass or adjust the FHGR tooling transport.";
+    return "sshpass is required for password-based SSH. Install sshpass or use SSH keys.";
   }
   if (message.includes("Operation timed out") || message.includes("Connection timed out")) {
     return `Could not reach ${host}. The connection timed out. Check the VPN/network and the server address.`;
@@ -94,8 +91,8 @@ function missingRemotePasswordMessage() {
   return "CROSSWALK_REMOTE_PASSWORD is not set. Put it in your local .env file and restart the dev server before connecting.";
 }
 
-function missingFhgrToolsMessage(path: string) {
-  return `FHGR helper tools were not found at ${path}. Set CROSSWALK_FHGR_TOOLS_DIR or keep ~/projects.school/tools/fhgr-server-config available.`;
+function missingRemoteToolsMessage(path: string) {
+  return `Remote helper tools were not found at ${path}. Set CROSSWALK_REMOTE_TOOLS_DIR or disable CROSSWALK_USE_REMOTE_TOOLS.`;
 }
 
 export function createRemoteController(projectRoot: string) {
@@ -107,26 +104,25 @@ export function createRemoteController(projectRoot: string) {
   const expectScriptPath = join(root, "ssh-login.expect");
   mkdirSync(jobsRoot, { recursive: true });
 
-  function fhgrToolsDir() {
-    return resolve(homePath(process.env.CROSSWALK_FHGR_TOOLS_DIR ?? "~/projects.school/tools/fhgr-server-config"));
+  function remoteToolsDir() {
+    return resolve(homePath(process.env.CROSSWALK_REMOTE_TOOLS_DIR ?? ".local/remote-tools"));
   }
 
-  function fhgrTool(name: "fhgr-vpn-check" | "fhgr-ssh" | "fhgr-scp") {
-    return join(fhgrToolsDir(), "bin", name);
+  function remoteTool(name: "remote-vpn-check" | "remote-ssh" | "remote-scp") {
+    return join(remoteToolsDir(), "bin", name);
   }
 
-  function hasFhgrTools() {
-    return existsSync(fhgrTool("fhgr-vpn-check")) && existsSync(fhgrTool("fhgr-ssh")) && existsSync(fhgrTool("fhgr-scp"));
+  function hasRemoteTools() {
+    return existsSync(remoteTool("remote-vpn-check")) && existsSync(remoteTool("remote-ssh")) && existsSync(remoteTool("remote-scp"));
   }
 
-  function useFhgrTools() {
-    return process.env.CROSSWALK_USE_FHGR_TOOLS !== "0" && hasFhgrTools();
+  function useRemoteTools() {
+    return process.env.CROSSWALK_USE_REMOTE_TOOLS === "1" && hasRemoteTools();
   }
 
-  function selectedFhgrHost(config: RemoteControllerConfig) {
+  function selectedRemoteToolHost(config: RemoteControllerConfig) {
     const option = loadServerOptions().find((entry) => entry.id === config.server_id);
-    const host = option?.hostname ?? config.host;
-    return host.replace(/\.fhgr\.ch$/, "");
+    return option?.hostname ?? config.host;
   }
 
   function isFakeConfig(config = loadConfig()) {
@@ -134,17 +130,17 @@ export function createRemoteController(projectRoot: string) {
   }
 
   function requireVpn() {
-    if (!useFhgrTools()) return;
+    if (!useRemoteTools()) return;
     try {
-      runCommand(fhgrTool("fhgr-vpn-check"), []);
+      runCommand(remoteTool("remote-vpn-check"), []);
     } catch (error) {
-      throw new Error(`FHGR VPN is not connected. Open FortiClient, complete Microsoft Authenticator/MFA manually, then retry. ${formatRemoteError(error, "FHGR VPN")}`);
+      throw new Error(`Remote VPN check failed. Connect to the required VPN manually, then retry. ${formatRemoteError(error, "remote VPN")}`);
     }
   }
 
-  function passwordConfiguredOrFhgrTools() {
+  function passwordConfiguredOrRemoteTools() {
     if (isFakeConfig()) return true;
-    return useFhgrTools() || hasPasswordConfigured();
+    return useRemoteTools() || hasPasswordConfigured();
   }
 
   function ensureExpectScript() {
@@ -332,8 +328,8 @@ exit $exit_status
   }
 
   function buildRemoteCommand(config: RemoteControllerConfig, remoteCommand: string): [string, string[]] {
-    if (useFhgrTools()) {
-      return [fhgrTool("fhgr-ssh"), [selectedFhgrHost(config), remoteCommand]];
+    if (useRemoteTools()) {
+      return [remoteTool("remote-ssh"), [selectedRemoteToolHost(config), remoteCommand]];
     }
     const args = buildSshArgs(config);
     if (hasPasswordConfigured() && hasSshpass()) {
@@ -349,7 +345,7 @@ exit $exit_status
     const config = loadConfig();
     const state = loadState();
     const fake = isFakeConfig(config);
-    const passwordConfigured = fake || passwordConfiguredOrFhgrTools();
+    const passwordConfigured = fake || passwordConfiguredOrRemoteTools();
     const serverOptions = loadServerOptions();
     const selectedServerId = resolveSelectedServerId(config, serverOptions);
     const lastError = passwordConfigured ? state.last_error : missingRemotePasswordMessage();
@@ -360,9 +356,9 @@ exit $exit_status
       selected_server_id: selectedServerId,
       connected,
       password_configured: passwordConfigured,
-      sshpass_available: fake || useFhgrTools() || hasSshpass(),
+      sshpass_available: fake || useRemoteTools() || hasSshpass(),
       expect_available: hasExpect(),
-      password_transport_available: fake || useFhgrTools() || hasPasswordTransport(),
+      password_transport_available: fake || useRemoteTools() || hasPasswordTransport(),
       tmux_available: fake || hasLocalTool("tmux"),
       remote_home: fake ? join(root, "fake-home") : state.remote_home,
       remote_hostname: fake ? "fake-gpu-simulator" : state.remote_hostname,
@@ -380,8 +376,8 @@ exit $exit_status
       });
       return getSnapshot();
     }
-    if (!hasFhgrTools() && process.env.CROSSWALK_USE_FHGR_TOOLS === "1") {
-      const message = missingFhgrToolsMessage(fhgrToolsDir());
+    if (!hasRemoteTools() && process.env.CROSSWALK_USE_REMOTE_TOOLS === "1") {
+      const message = missingRemoteToolsMessage(remoteToolsDir());
       saveState({
         remote_home: null,
         remote_hostname: null,
@@ -389,7 +385,7 @@ exit $exit_status
       });
       throw new Error(message);
     }
-    if (!passwordConfiguredOrFhgrTools()) {
+    if (!passwordConfiguredOrRemoteTools()) {
       const message = missingRemotePasswordMessage();
       console.warn(`[remote-controller] ${message}`);
       saveState({
@@ -491,10 +487,10 @@ exit $exit_status
       repoPath: configRemoteRepo(config, state.remote_home),
       sshArgs: buildSshArgs(config),
       scpArgs: buildScpArgs(config),
-      useFhgr: useFhgrTools(),
-      fhgrHost: selectedFhgrHost(config),
-      fhgrSsh: fhgrTool("fhgr-ssh"),
-      fhgrScp: fhgrTool("fhgr-scp"),
+      useRemoteTools: useRemoteTools(),
+      remoteToolHost: selectedRemoteToolHost(config),
+      remoteSshTool: remoteTool("remote-ssh"),
+      remoteScpTool: remoteTool("remote-scp"),
       usePassword,
       useSshPass: usePassword && hasSshpass(),
       useExpect: usePassword && !hasSshpass() && hasExpect(),
@@ -523,7 +519,7 @@ exit $exit_status
       void runFakeRemoteJob(metadata, job);
       return getJob(metadata.id);
     }
-    if (!passwordConfiguredOrFhgrTools()) {
+    if (!passwordConfiguredOrRemoteTools()) {
       const message = missingRemotePasswordMessage();
       console.warn(`[remote-controller] ${message}`);
       throw new Error(message);

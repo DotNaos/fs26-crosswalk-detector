@@ -22,10 +22,10 @@ type RemoteRunScriptInput = {
   repoPath: string;
   sshArgs: string[];
   scpArgs: string[];
-  useFhgr: boolean;
-  fhgrHost: string;
-  fhgrSsh: string;
-  fhgrScp: string;
+  useRemoteTools: boolean;
+  remoteToolHost: string;
+  remoteSshTool: string;
+  remoteScpTool: string;
   usePassword: boolean;
   useSshPass: boolean;
   useExpect: boolean;
@@ -38,7 +38,7 @@ export function shellQuote(value: string) {
 }
 
 export function buildRemoteRunScript(input: RemoteRunScriptInput) {
-  const { config, metadata, jobsRoot, repoPath, sshArgs, scpArgs, useFhgr, fhgrHost, fhgrSsh, fhgrScp, usePassword, useSshPass, useExpect, login, hfTokenOpRef } = input;
+  const { config, metadata, jobsRoot, repoPath, sshArgs, scpArgs, useRemoteTools, remoteToolHost, remoteSshTool, remoteScpTool, usePassword, useSshPass, useExpect, login, hfTokenOpRef } = input;
   return `#!/bin/zsh
 set -euo pipefail
 
@@ -51,9 +51,9 @@ SLURM_FILE=${shellQuote(metadata.local_slurm_job_id_path)}
 ERROR_FILE=${shellQuote(metadata.local_error_path)}
 EXPECT_HELPER=${shellQuote(join(jobsRoot, metadata.id, "expect-helper.tcl"))}
 REMOTE_LOGIN=${shellQuote(login)}
-FHGR_HOST=${shellQuote(fhgrHost)}
-FHGR_SSH=${shellQuote(fhgrSsh)}
-FHGR_SCP=${shellQuote(fhgrScp)}
+REMOTE_TOOL_HOST=${shellQuote(remoteToolHost)}
+REMOTE_SSH_TOOL=${shellQuote(remoteSshTool)}
+REMOTE_SCP_TOOL=${shellQuote(remoteScpTool)}
 REMOTE_REPO=${shellQuote(repoPath)}
 REMOTE_JOB=${shellQuote(metadata.remote_job_path)}
 REMOTE_RESULT=${shellQuote(metadata.remote_result_path)}
@@ -106,8 +106,8 @@ run_with_password() {
   expect "$EXPECT_HELPER" "$@"
 }` : ""}
 
-${useFhgr ? `run_ssh() {
-  "$FHGR_SSH" "$FHGR_HOST" "$@"
+${useRemoteTools ? `run_ssh() {
+  "$REMOTE_SSH_TOOL" "$REMOTE_TOOL_HOST" "$@"
 }
 
 run_scp() {
@@ -119,7 +119,7 @@ run_scp() {
   case "$dest_path" in
     "$REMOTE_LOGIN":*) dest_path=":\${dest_path#"$REMOTE_LOGIN":"}" ;;
   esac
-  "$FHGR_SCP" "$FHGR_HOST" "$source_path" "$dest_path"
+  "$REMOTE_SCP_TOOL" "$REMOTE_TOOL_HOST" "$source_path" "$dest_path"
 }` : `run_ssh() {
 ${useSshPass ? "  sshpass -e ssh " : useExpect ? "  run_with_password ssh " : "  ssh "}${sshArgs.map(shellQuote).join(" ")} "$REMOTE_LOGIN" "$@"
 }

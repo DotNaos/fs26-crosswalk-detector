@@ -50,6 +50,6 @@ So the validation case becomes:
 
 Relevant files:
 
-- `/Users/oli/school/FS26/code/crosswalk-detector/web/src/utils.ts`
-- `/Users/oli/school/FS26/code/crosswalk-detector/web/src/components/SceneMap.tsx`
-- `/Users/oli/school/FS26/code/crosswalk-detector/web/src/useMapValidationRuntime.ts`
+- `web/src/utils.ts`
+- `web/src/components/SceneMap.tsx`
+- `web/src/useMapValidationRuntime.ts`

@@ -22,13 +22,17 @@ mkdir -p .local/remote-controller
 cp remote-controller.config.example.json .local/remote-controller/config.json
 ```
 
-3. Set the SSH password as an environment variable:
+3. Edit `.local/remote-controller/config.json` and replace the placeholder
+   host, username, and repo path with values for your own remote machine. This
+   local file is ignored by Git.
+
+4. Set the SSH password as an environment variable:
 
 ```bash
-export CROSSWALK_REMOTE_PASSWORD='your-password-here'
+export CROSSWALK_REMOTE_PASSWORD='<password>'
 ```
 
-4. Start the local container:
+5. Start the local container:
 
 ```bash
 docker compose -f docker-compose.local.yml up --build
