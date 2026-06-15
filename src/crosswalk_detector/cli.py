@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from .pilot import (
+from .geo.pilot import (
     bootstrap_local_pilot,
     build_pilot_summary,
     build_full_capped_dataset,
@@ -17,20 +17,20 @@ from .pilot import (
     load_pilot_config,
     write_default_config,
 )
-from .real_pipeline import build_real_dataset, write_compact_manifest
-from .scan_batch import load_scan_batch_job, run_scan_batch_job, summarize_scan_batch_result, write_scan_batch_result
-from .metadata_dataset import validate_metadata_dataset
-from .raw_imagery import download_dataset_scenes
-from .sam3_metadata import (
+from .data.real_pipeline import build_real_dataset, write_compact_manifest
+from .scan.scan_batch import load_scan_batch_job, run_scan_batch_job, summarize_scan_batch_result, write_scan_batch_result
+from .data.metadata_dataset import validate_metadata_dataset
+from .data.raw_imagery import download_dataset_scenes
+from .data.sam3_metadata import (
     build_sam3_shard_jobs,
     export_training_dataset,
     merge_sam3_metadata_dataset,
     prepare_sam3_metadata_dataset,
 )
-from .sam3_results import summarize_sam3_results
-from .train_mobilenet import train_mobilenet, train_scratch_cnn, train_scratch_mobilenet
-from .train_crossmask import prepare_crossmask_export, train_crossmask
-from .crossmask_inference import run_crossmask_request
+from .data.sam3_results import summarize_sam3_results
+from .models.train_mobilenet import train_mobilenet, train_scratch_cnn, train_scratch_mobilenet
+from .models.train_crossmask import prepare_crossmask_export, train_crossmask
+from .models.crossmask_inference import run_crossmask_request
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -363,7 +363,7 @@ def main() -> int:
     if args.command == "write-compact-manifest":
         import csv
 
-        from .real_config import load_real_pipeline_config
+        from .data.real_config import load_real_pipeline_config
 
         config = load_real_pipeline_config(args.config)
         export_root = Path("data") / "processed" / args.run_name / "exports" / args.name

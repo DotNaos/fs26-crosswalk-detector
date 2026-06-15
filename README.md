@@ -42,18 +42,20 @@ The latest measured test results for CrossMaskNet v4 are:
 
 - `src/crosswalk_detector/`: Python training, inference, dataset, and pipeline code
 - `web/`: dataset explorer and review frontend
-- `scripts/`: local dataset export, review export, and batch-processing helpers
-- `docs/`: project report draft, dataset notes, and design decisions
+- `scripts/`: asset restore and static metadata export helpers
+- `docs/`: final report, exam notes, dataset restore details, and project decisions
 - `tests/`: automated checks
 - `configs/`: local run configuration files
-- `datasets/`, `results/`, `review-exports/`, `logs/`: local generated artifacts
-- `.local/release/crossmasknet-v4/`: local release copy of the current model checkpoint and metrics
+- `data/`, `models/`, `results/`, `review-exports/`, `logs/`: local generated artifacts
 
 Large datasets, generated masks, logs, and model checkpoints should normally stay out of Git. The compressed static dataset metadata used by the deployed frontend lives under `web/public/static-datasets/`.
 
 ## Quick Start
 
-Requirements: `git` and `uv` must already be installed.
+Requirements: `git` plus either `uv` or Python 3.12. The `uv` path is the
+recommended setup.
+
+### Using uv
 
 Copy and paste this into PowerShell, macOS Terminal, or a Linux terminal:
 
@@ -62,6 +64,23 @@ git clone https://github.com/DotNaos/fs26-crosswalk-detector.git
 cd fs26-crosswalk-detector
 uv sync
 uv run test --count 20 --positive-ratio 0.5 --output-dir data/predictions/release-check --positive-threshold 0.005
+```
+
+### Using Python
+
+If `uv` is not available, use a normal Python 3.12 virtual environment:
+
+```bash
+git clone https://github.com/DotNaos/fs26-crosswalk-detector.git
+cd fs26-crosswalk-detector
+python -m venv .venv
+```
+
+Activate it, then install and run the same workflow through the Python module:
+
+```bash
+python -m pip install -e .
+python -m crosswalk_detector.workflow test --count 20 --positive-ratio 0.5 --output-dir data/predictions/release-check --positive-threshold 0.005
 ```
 
 This creates:
@@ -105,6 +124,9 @@ The normal workflow commands are:
 | `uv run train` | Ensures the dataset exists, then trains CrossMaskNet and writes a checkpoint plus metrics. |
 | `uv run test` | Downloads the public checkpoint and example input images if needed, then classifies images into output folders. With `--metrics-only`, it only prints stored model metrics. |
 
+Without `uv`, replace `uv run <command>` with
+`python -m crosswalk_detector.workflow <command>`.
+
 SAM3 is only needed if you want to run the labeling pipeline yourself. The
 normal `dataset`, `train`, and `test` commands use the released labels and do
 not require SAM3.
@@ -121,14 +143,14 @@ All options are optional. If you omit them, the commands use these defaults:
 | `--input-dir` | not set | Folder of your own images for `test` to classify. If omitted, `test` downloads example images automatically. |
 | `--download-dir` | `data/input/crossmask-images` | Where `test` writes automatically downloaded input images. |
 | `--output-dir` | `data/predictions/crossmask-test` | Where `test` writes classified images, overlays, and summary files. |
-| `--positive-threshold` | `0.005` | Minimum mask coverage for `test` to classify an image as `positive`. Images below this value go to `negative/`. Lower values put more images in `positive/`; higher values put more images in `negative/`. |
+| `--positive-threshold`, `--threshold` | `0.005` | Minimum mask coverage for `test` to classify an image as `positive`. Images below this value go to `negative/`. Lower values put more images in `positive/`; higher values put more images in `negative/`. |
 | `--no-overlays` | off | Skips writing overlay images for positive predictions. |
 | `--count` | `20` | Total number of example images downloaded by `test` when `--input-dir` is omitted, or by `download-images`. |
 | `--positive-ratio` | `0.5` | Share of downloaded examples that come from positive source labels. `0.5` with `--count 20` means 10 positive and 10 negative examples. |
 | `--positive-count` / `--negative-count` | not set | Explicit class counts for downloaded examples if you do not want to use `--count` and `--positive-ratio`. |
 | `--epochs` | `1` | Number of full passes over the training data. Increase this for a stronger run. |
 | `--batch-size` | `4` | Number of image/mask pairs processed in one training step. Increase this on stronger machines. |
-| `--image-size` | `128` | Training crop size. `128` means each crop is resized to 128 x 128 pixels. |
+| `--image-size` | `128` | Image size in pixels. For `dataset` and `train`, this is the prepared training image and mask size. For `download-images` and automatic `test` downloads, this is the downloaded input image size. |
 | `--limit-scenes` | no limit | Limits the raw scene prefetch step. The export can still download a missing scene later if it needs it. |
 | `--positive-limit` | `30` for `train`; `2500` for `dataset` | Maximum number of crosswalk examples used when preparing the local training export. |
 | `--negative-ratio` | `1.0` | Number of no-crosswalk examples per crosswalk example. `1.0` means a balanced export. |
@@ -142,7 +164,8 @@ All options are optional. If you omit them, the commands use these defaults:
 | `--road-channel` | off | Adds a road-context input channel during training. |
 | `--skip-raw-cache` | on for `train`; off for `dataset` | Skips the full scene prefetch and downloads only scenes needed while building the export. |
 | `--prefetch-raw-cache` | off | For `train`, downloads the raw scene cache before building the export. This is slower but useful for larger runs. |
-| `--no-progress` | off | Disables live progress output during `download-images`, `train`, or `test --input-dir`. |
+| `--overwrite` | off | For `download-images`, removes existing images in the output folder first. |
+| `--no-progress` | off | Disables live progress output during `download-images`, `train`, and `test`. |
 | `--metrics-only` | off | For `test`, prints stored model metrics without downloading or classifying images. |
 | `--rebuild-export` | off | Recreates the prepared dataset export even if it already exists. |
 | `--seed` | `7` | Keeps the train/test split and sampling repeatable. |
@@ -254,6 +277,16 @@ This downloads:
 - CrossMaskNet v4 checkpoint and metrics to
   `models/crossmask/sam3-500k-road-channel-v4/`.
 
+Useful restore options:
+
+| Option | What it does |
+|---|---|
+| `--skip-dataset` | Downloads only the model assets. |
+| `--skip-model` | Downloads only the dataset metadata. |
+| `--force` | Re-downloads and overwrites existing release assets. |
+| `--dataset-output` | Writes the static dataset metadata to a custom folder. |
+| `--model-output` | Writes the model checkpoint and metrics to a custom folder. |
+
 The raw aerial images are intentionally not stored in Git or in the release
 archive. They are downloaded reproducibly from swisstopo when a training export
 needs them. To prefetch the raw scene cache before preparing or testing a
@@ -292,11 +325,10 @@ The root `vercel.json` is required because the web app lives in `web/`, while th
 
 - Final project report: `docs/project-report.md`
 - Exam notes: `docs/exam-notes.md`
-- Project report draft: `docs/project-report-draft.md`
 - Project decisions: `docs/project-decisions.md`
 - Static dataset deployment: `docs/static-dataset-deployment.md`
-- SAM3 dataset data model: `docs/sam3-100k-data-model.md`
-- SAM3 runbook: `docs/sam3-100k-runbook.md`
+- Dataset metadata notes: `datasets/README.md`
+- Web frontend notes: `web/README.md`
 
 ## AI Assistance
 

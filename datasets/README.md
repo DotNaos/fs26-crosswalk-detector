@@ -4,11 +4,15 @@ This folder is for git-friendly dataset metadata only.
 
 Do not commit generated image files here. The dataset images should be restored from Swisstopo source metadata or cached outside git.
 
+The final public dataset is distributed as a GitHub Release archive and restored
+to `web/public/static-datasets/` by `uv run dataset`, `uv run train`,
+`uv run test`, or `python3 scripts/download_submission_assets.py`. The raw
+Swisstopo images are downloaded locally only when a command needs image pixels.
+
 See also:
 
-- `docs/sam3-100k-dataset-pipeline.md`
-- `docs/sam3-100k-data-model.md`
-- `docs/sam3-100k-runbook.md`
+- `docs/static-dataset-deployment.md`
+- `docs/project-decisions.md`
 
 ## Layout
 
@@ -31,7 +35,7 @@ datasets/
 
 `dataset.json` is the index. It lists all JSONL shards and their relative paths.
 
-`tiles.jsonl` stores one image metadata object per line. Keep shards small enough for readable diffs and on-demand loading. For the 100k SAM3 dataset, use perimeter or scene/perimeter shards rather than one large file.
+`tiles.jsonl` stores one image metadata object per line. Keep shards small enough for readable diffs and on-demand loading.
 
 ## Rules
 

@@ -345,7 +345,7 @@ async function handleTileUpdate(request: Request, tileId: string) {
       run,
       exportName,
       [{ confidence: 1.0, decision: body.selected ? (body.label as "crosswalk" | "no_crosswalk") : "drop", tile_id: tileId }],
-      { display_name: "Oli", kind: "human", priority: 1000, source_id: "human:oli" },
+      { display_name: "Human reviewer", kind: "human", priority: 1000, source_id: "human:reviewer" },
     );
     return jsonResponse({ tile });
   }
@@ -487,7 +487,7 @@ async function handleAutopilotPlan(request: Request) {
     pythonExecutable(),
     [
       "-m",
-      "crosswalk_detector.autopilot",
+      "crosswalk_detector.geo.autopilot",
       "--web-plan",
       "--target-positive-count",
       String(targetPositiveCount),
@@ -529,7 +529,7 @@ async function handleRoadClusterGrid(request: Request) {
     pythonExecutable(),
     [
       "-m",
-      "crosswalk_detector.road_cluster_grid",
+      "crosswalk_detector.geo.road_cluster_grid",
       "--bbox",
       roundedBbox.join(","),
       "--zoom",

@@ -1,8 +1,8 @@
 import json
 from pathlib import Path
 
-from crosswalk_detector.metadata_dataset import resolve_label_votes, validate_metadata_dataset
-from crosswalk_detector.sam3_metadata import (
+from crosswalk_detector.data.metadata_dataset import resolve_label_votes, validate_metadata_dataset
+from crosswalk_detector.data.sam3_metadata import (
     build_sam3_shard_jobs,
     merge_sam3_metadata_dataset,
     prepare_sam3_metadata_dataset,
@@ -142,7 +142,7 @@ def test_resolve_label_votes_prefers_human_over_model_priority() -> None:
             },
             {
                 "vote_id": "human",
-                "source": {"source_id": "human:oli", "kind": "human", "priority": 1000, "display_name": "Oli"},
+                "source": {"source_id": "human:reviewer", "kind": "human", "priority": 1000, "display_name": "Human reviewer"},
                 "decision": "no_crosswalk",
                 "created_at": "2026-05-15T01:00:00Z",
             },
@@ -151,7 +151,7 @@ def test_resolve_label_votes_prefers_human_over_model_priority() -> None:
 
     assert resolved == {
         "decision": "no_crosswalk",
-        "source_id": "human:oli",
+        "source_id": "human:reviewer",
         "source_kind": "human",
         "resolved_by": "human_override",
         "updated_at": "2026-05-15T01:00:00Z",

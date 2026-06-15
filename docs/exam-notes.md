@@ -1,7 +1,8 @@
 # Exam Notes
 
-This file maps the official project requirements to this repository. Use it as a
-short preparation guide before finalizing the optional two-page report.
+This file maps the expected project requirements to the current repository. It
+is a compact preparation guide; the full setup instructions live in
+`README.md`, and the concise report lives in `docs/project-report.md`.
 
 ## Required Submission
 
@@ -11,6 +12,13 @@ The mandatory submission consists of:
 |---|---|
 | Created and used dataset | Public dataset metadata release, restored by `uv run dataset` or automatically by `uv run train` and `uv run test`. |
 | Code of the used and described models | Python code in `src/crosswalk_detector/`, especially the CrossMaskNet training and inference code. |
+
+The repository also contains:
+
+- reproducible setup and command documentation in `README.md`;
+- the final short report in `docs/project-report.md`;
+- release links for the public dataset metadata and model checkpoint;
+- a static dataset explorer for inspecting the released metadata.
 
 The optional project report should be no longer than two A4 pages. The grading
 help sheet names five report topics, each worth 4 points:
@@ -139,7 +147,9 @@ These are the core points to understand:
 | File | Purpose |
 |---|---|
 | `README.md` | Quick start, commands, defaults, release links, and current metrics. |
-| `docs/project-report-draft.md` | Longer explanation that can be condensed into a two-page report. |
+| `docs/project-report.md` | Final concise project report. |
 | `docs/static-dataset-deployment.md` | How the public dataset and checkpoint are restored. |
-| `docs/project-decisions.md` | Historical project decisions and rationale. |
-
+| `docs/project-decisions.md` | Current project decisions and rationale. |
+| `docs/README.md` | Overview of the documentation folder. |
+| `datasets/README.md` | What belongs in the dataset folder and what stays out of Git. |
+| `web/README.md` | How the dataset explorer frontend is built and run locally. |

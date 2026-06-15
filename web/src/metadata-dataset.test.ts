@@ -179,12 +179,12 @@ describe("metadata dataset JSONL pagination", () => {
       "sam3-votes",
       "metadata-votes",
       [{ confidence: 1.0, decision: "crosswalk", tile_id: "a" }],
-      { display_name: "Oli", kind: "human", priority: 1000, source_id: "human:oli" },
+      { display_name: "Human reviewer", kind: "human", priority: 1000, source_id: "human:reviewer" },
       root,
     );
 
     const [row] = loadMetadataTilePage(datasetId, null, { limit: 1 }, root).rows;
-    expect(row.labels.map((vote) => vote.source.source_id)).toEqual(["sam3.1", "crossmasknet-v4", "human:oli"]);
-    expect(row.resolved_label).toMatchObject({ decision: "crosswalk", resolved_by: "human_override", source_id: "human:oli" });
+    expect(row.labels.map((vote) => vote.source.source_id)).toEqual(["sam3.1", "crossmasknet-v4", "human:reviewer"]);
+    expect(row.resolved_label).toMatchObject({ decision: "crosswalk", resolved_by: "human_override", source_id: "human:reviewer" });
   });
 });

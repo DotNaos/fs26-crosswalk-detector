@@ -3,9 +3,9 @@ from types import SimpleNamespace
 
 from PIL import Image
 
-from crosswalk_detector import input_images
+from crosswalk_detector.data import input_images
 from crosswalk_detector.workflow import _image_counts
-from crosswalk_detector.train_crossmask import MaskCandidate
+from crosswalk_detector.models.train_crossmask import MaskCandidate
 
 
 def test_download_input_images_writes_flat_input_folder(tmp_path: Path, monkeypatch) -> None:

@@ -1,4 +1,4 @@
-from crosswalk_detector.road_cluster_grid import _bounded_cell_size, _keep_cluster_cell
+from crosswalk_detector.geo.road_cluster_grid import _bounded_cell_size, _keep_cluster_cell
 
 
 def test_zoomed_road_clusters_use_25_meter_cells_when_view_is_small_enough() -> None:

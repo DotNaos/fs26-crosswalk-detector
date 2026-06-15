@@ -1,6 +1,6 @@
 # Projektbericht: Fussgaengerstreifen-Erkennung in Luftbildern
 
-Status: 2026-06-14
+Stand: 2026-06-15
 
 ## 1. Ziel des Projekts
 
@@ -159,4 +159,3 @@ geforderten Klassifikation und ist gleichzeitig besser interpretierbar.
 Der Datensatz wurde mit SAM3-Pseudo-Labels aufgebaut. Das eingereichte Modell
 ist CrossMaskNet v4, ein eigenes PyTorch-Modell, das in diesem Repository
 trainiert und ausgewertet wird.
-

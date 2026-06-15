@@ -9,8 +9,8 @@ import subprocess
 import sys
 from typing import Any
 
-from .raw_imagery import download_dataset_scenes
-from .train_crossmask import prepare_crossmask_export, train_crossmask
+from .data.raw_imagery import download_dataset_scenes
+from .models.train_crossmask import prepare_crossmask_export, train_crossmask
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATASET = Path("web/public/static-datasets/sam3-500k-masks-v1")
@@ -119,7 +119,7 @@ def test_main() -> int:
         _stage("Checking project assets...", enabled=not args.no_progress)
         _ensure_project_assets(skip_model=not needs_release_model)
     if not args.metrics_only:
-        from .crossmask_inference import run_crossmask_image_directory
+        from .models.crossmask_inference import run_crossmask_image_directory
 
         if args.input_dir:
             input_dir = _resolve(args.input_dir)
@@ -365,7 +365,7 @@ def _prepare_input_images(
     negative_count: int,
     overwrite: bool,
 ) -> dict[str, Any]:
-    from .input_images import download_input_images
+    from .data.input_images import download_input_images
 
     _stage(f"Preparing {positive_count + negative_count} input image(s): {output_dir}", enabled=not args.no_progress)
     return download_input_images(
